@@ -1,0 +1,315 @@
+name: Sync GitHub Projects status to Planka
+
+# v4 (rebuild, 2026-08-16): GitHub Projects v2's Status field now drives
+# which Planka list a card lives in -- this used to only understand binary
+# issue open/closed (2 categories). Content (title/body) still flows
+# one-way GitHub -> Planka; only Planka card *moves* flow back, via a
+# separate n8n receiver (rebuild step 6, not this file). Status <-> list
+# mapping is data-driven from config/status-mapping.json -- a new status
+# category or a newly-migrated repo should mean editing that file, not
+# this workflow. See REBUILD-HANDOFF.md for the full design and order.
+#
+# Two trigger paths, both converging on the same sync_one_item() logic,
+# so results are idempotent no matter which one fired:
+#   - issues: fast content sync (title/body edits, open/close) -- also
+#     looks up the issue's current Project status, so an edit nudges the
+#     card to the right list too, not just its text. Also self-sufficient
+#     for getting new issues onto the Project at all: GitHub's own
+#     "Auto-add to project" built-in workflow does NOT reliably fire for
+#     this (personal, non-org) account -- confirmed 2026-08-18 with a
+#     fresh issue even after correctly configuring the watched repo and
+#     enabling the workflow. Rather than depend on it, this job adds the
+#     issue to the Project itself via `addProjectV2ItemById` if it isn't
+#     there yet, and defaults a freshly-added item's Status to Backlog so
+#     it doesn't sit permanently unsynced waiting for manual triage.
+#   - schedule: reconciliation sweep across every repo listed in the
+#     mapping config, every 6 HOURS (loosened from 5 min on 2026-08-23,
+#     after the 5-min interval -- itself tightened from an already-
+#     unsustainable 15 min on 2026-08-18 -- burned through the account's
+#     entire monthly free Actions-minutes budget across 10 private repos
+#     in under a day and triggered an account-wide billing lockout, all
+#     workflows failing with "spending limit needs to be increased").
+#     Real math, not guessed: 10 repos on a 2,000 min/month free-tier
+#     budget, 1 billed minute minimum per run regardless of actual
+#     duration -- 6h gives 10*4*30=1,200 min/month from scheduling alone,
+#     leaving ~800 min/month (40%) of headroom for issues/dispatch-
+#     triggered runs. The schedule sweep only exists to catch one rare
+#     case (a Planka card dragged by hand in the UI, with no
+#     corresponding GitHub Issue edit) -- the common case (editing an
+#     Issue) is real-time via the `issues` trigger below, zero recurring
+#     cost, entirely unaffected by this interval. Still the ONLY
+#     mechanism that catches a pure status-field move at all, though --
+#     `on: projects_v2_item` was tried as a faster path and rejected
+#     outright by GitHub's Actions parser (live 422, 2026-08-16). A repo
+#     *webhook* for the same event was considered as a follow-up instead
+#     of an Actions trigger -- researched and ruled out 2026-08-18:
+#     `projects_v2_item` webhooks are organization-only (confirmed by a
+#     GitHub maintainer in community discussion #17405 -- no GitHub App,
+#     personal-account, or repo-level path exists; would require GitHub
+#     shipping a "user webhooks" feature that doesn't exist). Classic
+#     Projects had a `project_card` webhook that covered this; it was
+#     dropped for Projects v2 and never brought back (discussion #40848,
+#     open since 2022, downscoped off GitHub's own roadmap in 2023). The
+#     community's own stated answer is "poll the GraphQL API" -- exactly
+#     what this branch already does; there is no faster mechanism
+#     available for a personal (non-org) account, full stop. Capped at
+#     the first 100 items per project (no pagination) -- fine for
+#     realistic item counts here; revisit if a project ever exceeds that.
+#
+# Requires a repo secret `PROJECTS_READ_TOKEN` -- a CLASSIC PAT (`repo` +
+# `read:project` scopes), NOT fine-grained. Fine-grained tokens don't
+# expose a Projects permission at all for a personal-account Project --
+# confirmed via a live "Resource not accessible by personal access token"
+# error 2026-08-16 with every fine-grained scope checked. Separate from
+# the write-scoped PAT step 5 gets for the n8n receiver's credential --
+# that one's for Planka-to-GitHub writes, this one's read-only for
+# GitHub-to-Planka reads, but both need to be classic tokens.
+
+on:
+  issues:
+    types: [opened, closed, reopened, edited]
+  schedule:
+    - cron: "0 */6 * * *"
+  workflow_dispatch: {}
+
+# Queues overlapping runs of THIS repo's workflow instead of letting them
+# race each other against shared Planka state. Added 2026-08-20 after a
+# real incident: seed-backlog-issues.sh closes several issues in a tight
+# loop, each `issues:closed` firing its own async run; those runs (plus
+# the final workflow_dispatch reconciliation sweep the script also fires)
+# overlapped in time, and two runs both read "no existing card yet" for
+# the same issue before either one's write became visible -- 5 of 9
+# newly-seeded cards on homeassistant-work were duplicated this way.
+# cancel-in-progress: false is essential -- this must QUEUE runs, not
+# cancel them, or a legitimate concurrent event (e.g. a real card move
+# arriving mid-sweep) would get silently dropped instead of just delayed.
+concurrency:
+  group: planka-sync-${{ github.repository }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    env:
+      PLANKA_SERVER: ${{ secrets.PLANKA_SERVER }}
+      PLANKA_API_KEY: ${{ secrets.PLANKA_API_KEY }}
+      GH_TOKEN: ${{ secrets.PROJECTS_READ_TOKEN }}
+      EVENT_NAME: ${{ github.event_name }}
+      REPO: ${{ github.repository }}
+      ISSUE_NUMBER: ${{ github.event.issue.number }}
+      ISSUE_TITLE: ${{ github.event.issue.title }}
+      ISSUE_BODY: ${{ github.event.issue.body }}
+    steps:
+      # Fetches the mapping config from planka-work specifically, regardless
+      # of which repo this workflow file is running in -- planka-work is the
+      # single source of truth, other repos' copies of this workflow don't
+      # carry their own copy of the config. Needs PROJECTS_READ_TOKEN (repo
+      # scope) since planka-work is private.
+      - uses: actions/checkout@v4
+        with:
+          repository: dissentingd/planka-work
+          token: ${{ secrets.PROJECTS_READ_TOKEN }}
+          path: _mapping-repo
+
+      - name: Sync issue/project status to Planka
+        run: |
+          set -euo pipefail
+          MAPPING="_mapping-repo/config/status-mapping.json"
+
+          # Upsert one Planka card by its gh-issue marker, moving it to
+          # whatever list the given status name maps to. A repo can map to
+          # more than one Planka board (rom-work has two) -- loop over every
+          # board in the repo's config and upsert on each one independently,
+          # so a single Issue's status stays reflected on all of them.
+          sync_one_item() {
+            local repo="$1" number="$2" title="$3" body="$4" status_name="$5"
+            local marker="gh-issue:${repo}#${number}"
+            local repo_cfg board_count i
+
+            repo_cfg=$(jq -c --arg r "$repo" '.repos[$r] // empty' "$MAPPING")
+            if [ -z "$repo_cfg" ]; then
+              echo "No mapping entry for $repo yet, skipping ($marker)"; return 0
+            fi
+
+            board_count=$(jq -r '.boards | length' <<< "$repo_cfg")
+            i=0
+            while [ "$i" -lt "$board_count" ]; do
+              local board board_id list_id description title_trimmed existing_card_id
+              board=$(jq -c ".boards[$i]" <<< "$repo_cfg")
+              board_id=$(jq -r '.planka_board_id' <<< "$board")
+              list_id=$(jq -r --arg s "$status_name" '.statuses[] | select(.name==$s) | .planka_list_id' <<< "$board")
+
+              if [ -z "$list_id" ] || [ "$list_id" = "null" ]; then
+                echo "Status '$status_name' has no mapped list on board $board_id for $repo, skipping ($marker)"
+                i=$((i+1)); continue
+              fi
+
+              title_trimmed=$(jq -rn --arg t "$title" '$t' | head -c 500)
+              # -r/--raw-output is essential here: without it jq wraps its
+              # string result in JSON quoting, which then gets re-encoded
+              # AGAIN by the jq calls that build the POST/PATCH body below --
+              # double-encoding the description on every card ever written.
+              # Root cause of a real bug found 2026-08-19: the stored text
+              # ended in a literal trailing `"` and literal two-character
+              # `\n` sequences instead of real newlines, so endswith($marker)
+              # (and to a lesser, less visible extent contains($marker))
+              # could never cleanly match against it.
+              description=$(jq -rn --arg body "$(head -c 2000 <<< "$body")" --arg marker "$marker" \
+                '$body + "\n\n---\n" + $marker')
+
+              # endswith, not contains: the marker is always the literal
+              # last line of the description by construction (below), and
+              # contains() was matching "#1" as a substring of "#12", "#13",
+              # etc. -- a real bug found 2026-08-19 causing wrong-card writes
+              # on boards with enough issues for numbers to collide as
+              # prefixes of each other.
+              existing_card_id=$(curl -s "$PLANKA_SERVER/api/boards/$board_id" \
+                -H "x-api-key: $PLANKA_API_KEY" \
+                | jq -r --arg marker "$marker" \
+                  '.included.cards[] | select(.description // "" | endswith($marker)) | .id' | head -1)
+
+              if [ -n "$existing_card_id" ]; then
+                echo "-> updating card $existing_card_id to '$status_name' on board $board_id ($marker)"
+                curl -sf -X PATCH "$PLANKA_SERVER/api/cards/$existing_card_id" \
+                  -H "x-api-key: $PLANKA_API_KEY" -H "Content-Type: application/json" \
+                  -d "$(jq -n --arg name "$title_trimmed" --arg desc "$description" --arg listId "$list_id" --arg boardId "$board_id" \
+                        '{name: $name, description: $desc, listId: $listId, boardId: $boardId, position: 65536}')" > /dev/null
+              else
+                echo "-> creating card in '$status_name' on board $board_id ($marker)"
+                curl -sf -X POST "$PLANKA_SERVER/api/lists/$list_id/cards" \
+                  -H "x-api-key: $PLANKA_API_KEY" -H "Content-Type: application/json" \
+                  -d "$(jq -n --arg name "$title_trimmed" --arg desc "$description" \
+                        '{name: $name, type: "project", position: 65536, description: $desc}')" > /dev/null
+              fi
+              i=$((i+1))
+            done
+          }
+
+          case "$EVENT_NAME" in
+            issues)
+              owner="${REPO%/*}"; reponame="${REPO#*/}"
+              repo_cfg=$(jq -c --arg r "$REPO" '.repos[$r] // empty' "$MAPPING")
+              if [ -z "$repo_cfg" ]; then
+                echo "No Project configured yet for $REPO, skipping"; exit 0
+              fi
+              proj_num=$(jq -r '.github_project_number' <<< "$repo_cfg")
+              proj_id=$(jq -r '.github_project_id' <<< "$repo_cfg")
+              field_id=$(jq -r '.github_status_field_id' <<< "$repo_cfg")
+
+              # One query gets the issue's node id (needed to add it to the
+              # Project if it isn't there yet) and its current item id/Status
+              # on this specific Project, if it's already an item.
+              issue_data=$(gh api graphql -f query='
+                query($owner:String!,$repo:String!,$number:Int!){
+                  repository(owner:$owner,name:$repo){
+                    issue(number:$number){
+                      id
+                      projectItems(first:10){
+                        nodes{
+                          id
+                          project{ number }
+                          fieldValueByName(name:"Status"){
+                            ... on ProjectV2ItemFieldSingleSelectValue{ name }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }' -f owner="$owner" -f repo="$reponame" -F number="$ISSUE_NUMBER")
+
+              content_id=$(jq -r '.data.repository.issue.id' <<< "$issue_data")
+              item_id=$(jq -r --argjson pn "$proj_num" \
+                '.data.repository.issue.projectItems.nodes[]? | select(.project.number==$pn) | .id' \
+                <<< "$issue_data" | head -1)
+              status=$(jq -r --argjson pn "$proj_num" \
+                '.data.repository.issue.projectItems.nodes[]? | select(.project.number==$pn) | .fieldValueByName.name // empty' \
+                <<< "$issue_data" | head -1)
+
+              # GitHub's own "Auto-add to project" built-in workflow does not
+              # reliably fire for this (personal, non-org) account -- confirmed
+              # 2026-08-18 with a fresh issue after correctly configuring it.
+              # Don't depend on it: add the issue ourselves if it isn't there.
+              if [ -z "$item_id" ]; then
+                echo "Issue #$ISSUE_NUMBER not yet on Project #$proj_num -- adding it"
+                item_id=$(gh api graphql -f query='
+                  mutation($projectId:ID!,$contentId:ID!){
+                    addProjectV2ItemById(input:{projectId:$projectId, contentId:$contentId}){
+                      item{ id }
+                    }
+                  }' -f projectId="$proj_id" -f contentId="$content_id" \
+                  | jq -r '.data.addProjectV2ItemById.item.id')
+              fi
+
+              # A newly-added item has no Status value yet -- default it to
+              # Backlog rather than leaving it permanently unsynced until
+              # someone happens to triage it by hand.
+              if [ -z "$status" ]; then
+                # Option ids are shared across all of a repo's boards (one
+                # GitHub Project, one Status field) -- any board's entry works.
+                default_option_id=$(jq -r '.boards[0].statuses[] | select(.name=="Backlog") | .github_option_id' <<< "$repo_cfg")
+                echo "No Status set yet -- defaulting to Backlog"
+                gh api graphql -f query='
+                  mutation($projectId:ID!,$itemId:ID!,$fieldId:ID!,$optionId:String!){
+                    updateProjectV2ItemFieldValue(input:{
+                      projectId:$projectId, itemId:$itemId, fieldId:$fieldId,
+                      value:{singleSelectOptionId:$optionId}
+                    }){ projectV2Item{ id } }
+                  }' -f projectId="$proj_id" -f itemId="$item_id" -f fieldId="$field_id" \
+                     -f optionId="$default_option_id" > /dev/null
+                status="Backlog"
+              fi
+
+              sync_one_item "$REPO" "$ISSUE_NUMBER" "$ISSUE_TITLE" "$ISSUE_BODY" "$status"
+              ;;
+
+            schedule|workflow_dispatch)
+              # Reconcile ONLY this repo's own Project -- not every repo in
+              # the mapping config. Previously this looped over every repo,
+              # meaning each of the (now 7) repos' own copy of this workflow
+              # redundantly reconciled all 7 repos on every tick. That
+              # wasn't just wasteful: with 7 independent schedule triggers
+              # racing the same shared Planka state, two runs landing close
+              # together could both read "no existing card" before either
+              # one's write became visible, and both create a duplicate --
+              # confirmed 2026-08-19 on media-work, 29 duplicate cards
+              # accumulated over ~2.5 hours at the 5-min interval. Scoping
+              # each repo's sweep to itself removes the race by removing
+              # the overlap entirely, not just reducing its odds.
+              owner="${REPO%/*}"
+              repo_cfg=$(jq -c --arg r "$REPO" '.repos[$r] // empty' "$MAPPING")
+              if [ -z "$repo_cfg" ]; then
+                echo "No Project configured yet for $REPO, skipping"; exit 0
+              fi
+              proj_num=$(jq -r '.github_project_number' <<< "$repo_cfg")
+              echo "== reconciling $REPO (Project #$proj_num) =="
+              gh api graphql -f query='
+                query($login:String!,$number:Int!){
+                  user(login:$login){
+                    projectV2(number:$number){
+                      items(first:100){
+                        nodes{
+                          fieldValueByName(name:"Status"){ ... on ProjectV2ItemFieldSingleSelectValue{ name } }
+                          content{ ... on Issue{ number title body state repository{ nameWithOwner } } }
+                        }
+                      }
+                    }
+                  }
+                }' -f login="$owner" -F number="$proj_num" > page.json
+
+              jq -c '.data.user.projectV2.items.nodes[] | select(.content != null and .fieldValueByName != null)' page.json |
+              while IFS= read -r item; do
+                number=$(jq -r '.content.number' <<< "$item")
+                title=$(jq -r '.content.title' <<< "$item")
+                body=$(jq -r '.content.body // ""' <<< "$item")
+                status=$(jq -r '.fieldValueByName.name' <<< "$item")
+                sync_one_item "$REPO" "$number" "$title" "$body" "$status"
+              done
+              ;;
+
+            *)
+              echo "Unhandled event: $EVENT_NAME"; exit 0
+              ;;
+          esac
