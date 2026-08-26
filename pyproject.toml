@@ -1,0 +1,48 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "jellyfin-watch-restore"
+version = "0.1.0"
+description = "Restore watch history into Jellyfin from YAMTrack, Trakt-style exports, generic CSV, or an older Jellyfin backup"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
+authors = [{ name = "dissentingd" }]
+keywords = ["jellyfin", "watch-history", "yamtrack", "trakt", "media-server"]
+classifiers = [
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Topic :: Multimedia :: Video",
+]
+dependencies = [
+    "httpx>=0.27",
+    "ijson>=3.3",
+    "typer>=0.12",
+    "pydantic>=2.7",
+    "rich>=13.7",
+]
+
+[project.optional-dependencies]
+yamtrack-db = ["psycopg[binary]>=3.1"]
+dev = ["pytest>=8.0", "pytest-httpx>=0.30", "ruff>=0.5"]
+
+[project.urls]
+Homepage = "https://github.com/dissentingd/jellyfin-watch-restore"
+Issues = "https://github.com/dissentingd/jellyfin-watch-restore/issues"
+
+[project.scripts]
+jellyfin-watch-restore = "jellyfin_watch_restore.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/jellyfin_watch_restore"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
