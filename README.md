@@ -85,6 +85,31 @@ doesn't exist there, despite older tools/docs assuming it does). This tool
 fetches the library with `Fields=ProviderIds` and matches client-side instead
 — proven to work at real scale (500k+ item libraries).
 
+## Collections (Jellyfin BoxSets)
+
+Jellyfin Collections suffer the same file-relocation fragility as watch
+history, so this tool also backs them up into YAMTrack's Lists feature and
+restores them back — same TMDB-id matching, same dry-run-first discipline.
+A collection groups movies and/or whole series (not individual episodes --
+that's the granularity Jellyfin itself uses).
+
+```bash
+# Back up all your Jellyfin collections into YAMTrack Lists
+jellyfin-watch-restore backup-collections \
+  --yamtrack-dsn "postgresql://yamtrack:...@host:5432/yamtrack" \
+  --yamtrack-user-id 4 --apply
+
+# ... later, if Jellyfin's collections got damaged: restore them back
+jellyfin-watch-restore restore-collections \
+  --yamtrack-dsn "postgresql://yamtrack:...@host:5432/yamtrack" \
+  --yamtrack-user-id 4 --apply
+```
+
+Restoring is never destructive: a collection with a matching name already in
+Jellyfin is only ever added to (new members merged in), never replaced or
+pruned. Requires the `yamtrack-db` extra (direct Postgres access -- YAMTrack
+has no API/CSV path for Lists, same as it has none for watch history).
+
 ## Development
 
 ```bash
