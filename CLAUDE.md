@@ -96,6 +96,59 @@ independent of Jellyfin. The *restore* direction is proven correct
 the full 372 -- only do that deliberately, not as a "why not" afterthought,
 since unlike backup it writes into live Jellyfin.
 
+## Next steps for general (non-Dave) usage — SCOPED 2026-08-27, ON HOLD
+
+Confirmed clean first: `grep` across `src/` for any Dave-specific residue
+(IPs, real API keys, "productiveholdings", "seed", etc.) found **zero
+matches** — every real credential used during development/testing only ever
+appeared in invocations, never baked into the code. The tool itself has
+always been generic.
+
+Dave chose to proceed with items **2, 3, 5, 6, 7** below, explicitly **later
+— hold for now**, not started. Skipped for now: item 1 (flip repo public)
+and item 4 (publish to PyPI) — reasonable to hold those until the rest is
+in better shape.
+
+1. ~~Flip repo public~~ — not selected, hold.
+2. **README credential-discovery gap.** `JELLYFIN_URL`/`JELLYFIN_API_KEY`/
+   `JELLYFIN_USER_ID` are documented as if obvious. Add a short "Getting your
+   credentials" section: Dashboard → API Keys for the key; the user GUID is
+   in the Dashboard → Users page's URL (or via a one-line `curl .../Users`
+   snippet).
+3. **Friendlier error handling on common misconfigurations.** Right now a
+   bad API key or malformed user id surfaces as a raw `httpx.HTTPStatusError`
+   traceback. Catch 401/403 → "check your API key"; 404 on the user id →
+   "check JELLYFIN_USER_ID is a valid user GUID." Applies to both the
+   `restore` and `*-collections` commands in `cli.py`.
+4. ~~Publish to PyPI~~ — not selected, hold.
+5. **Docker image.** A `Dockerfile` + published `ghcr.io/dissentingd/
+   jellyfin-watch-restore` image, built via a GitHub Actions release
+   workflow. Also add `.env`-file loading (Typer already reads env vars for
+   every option; needs an entry-point wrapper to load a `.env` file first,
+   e.g. `python-dotenv`) since Docker/compose users expect that pattern over
+   long CLI flag lists.
+6. **Explicit version-compatibility documentation.** This session found
+   real, concrete version drift in this ecosystem firsthand — Jellyfin's
+   `AnyProviderIdEquals` doesn't exist in current versions despite older
+   tools/docs assuming it does, and its "MarkPlayed" event is actually named
+   `UserDataSaved`. State plainly in the README what Jellyfin version
+   (10.11.11) and YAMTrack version this was built/tested against, so a user
+   on a materially different version has the right expectation going in
+   rather than filing a confused issue.
+7. **`CONTRIBUTING.md`.** The architecture is explicitly built to be
+   extended (one file per new Source/Target — see `sources/base.py` /
+   `targets/base.py` / `collections/base.py`). Document the pattern: "add a
+   Trakt source by writing `sources/trakt.py` implementing `Source`" so a
+   contributor doesn't have to reverse-engineer it from existing files.
+   Should also cover: running tests (`pytest`), linting (`ruff check .`),
+   and the dry-run-first convention (§ above) as a hard requirement for any
+   new Target.
+
+Also noted but not yet scoped as a numbered item: Plex/Emby target support
+(the `Target` ABC already anticipates this) and a `CHANGELOG.md` (premature
+before a first tagged release) — real roadmap items, lower priority than
+1-7 above.
+
 ## Conventions
 
 - Dry-run-then-confirm is load-bearing, not a suggestion — mirrors the
