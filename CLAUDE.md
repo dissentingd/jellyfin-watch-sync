@@ -74,9 +74,27 @@ Validated the same way as watch-restore: unit tests (including a from-scratch
 in-memory fake of the 3 real tables for `YamtrackListsTarget`, since mocking
 psycopg felt worse than just simulating the tables) + a real E2E round trip
 against the live server (write a throwaway list -> read it back -> restore it
-as a real Jellyfin collection -> verify -> delete both ends). Real backup
-dry-run against production also confirmed the read/plan side at full scale:
-370 real collections, 7,138/7,138 members resolved.
+as a real Jellyfin collection -> verify -> delete both ends).
+
+**Real production backup run, 2026-08-26 — DONE, verified:** `backup-collections
+--apply` against Dave's real `seed` YAMTrack account. Tool reported
+`372 collections applied, 0 failed, 7,150/7,150 members resolved`. Independently
+re-verified from a fresh DB query afterward (not just trusted the tool's own
+report): `372` rows in `lists_customlist` for `owner_id=4` (exact match), sample
+collections spot-checked exact ("Kids TV"=200, "The Complete Criterion
+Collection"=583). One discrepancy chased down rather than waved off: DB showed
+`7,112` distinct list-item links vs the reported `7,150` resolved -- checked
+whether any list had duplicate raw rows (`raw_links != distinct_items` per
+list) and found **zero** across all 372 lists, so the gap is fully explained
+by a handful of collections listing the same TMDB-matched title twice in
+Jellyfin's own membership data, which `ON CONFLICT DO NOTHING` correctly
+deduped to one link -- not data loss, not a bug. Only 2 collections
+(`Peacock Top 10 Shows`, `The Three Stooges copy`) skipped, both genuinely
+empty in Jellyfin itself. Dave's real collection library is now backed up
+independent of Jellyfin. The *restore* direction is proven correct
+(mocked + a throwaway real round-trip) but has NOT been run for real against
+the full 372 -- only do that deliberately, not as a "why not" afterthought,
+since unlike backup it writes into live Jellyfin.
 
 ## Conventions
 
