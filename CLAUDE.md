@@ -45,6 +45,39 @@ runnable unpackaged: `python -m jellyfin_watch_restore.cli --help`.
 - `plan.py` — the dry-run-first data model; `cli.py`'s `restore` command
   always computes a plan and only writes with `--apply`.
 
+## Collections (added 2026-08-26)
+
+Same fragility, same fix, different data: Jellyfin Collections (BoxSets) also
+lose integrity across file relocations, and YAMTrack's Lists feature has zero
+existing import/export plumbing (confirmed by reading the actual export/import
+code before building anything, same diligence as the watch-history feature).
+Lives in `collections/` (yes, same name as the stdlib module — confirmed
+empirically this doesn't shadow it; Python 3's absolute-import-by-default
+means `jellyfin_watch_restore.collections` never collides with bare `import
+collections`). Mirrors the watch-history Source/Target shape but as its own
+parallel ABC pair (`CollectionSource`/`CollectionTarget`), since it's typed
+around `CollectionRecord` not `WatchRecord`:
+
+- `JellyfinCollectionsSource` / `YamtrackListsTarget` — backup direction.
+- `YamtrackListsSource` / `JellyfinCollectionsTarget` — restore direction.
+- Both Jellyfin-facing targets share `JellyfinLibraryIndex` (extracted from
+  the original watch-restore `JellyfinTarget` during this work) so the
+  library is only crawled once if both run in the same process.
+- `YamtrackListsTarget`'s SQL was verified against the LIVE schema (`\d
+  app_item` / `lists_customlist` / `lists_customlistitem`) before writing it
+  -- in particular `app_item`'s uniqueness is three *partial* indexes keyed
+  on season/episode nullness, and `lists_customlistitem`'s FKs have
+  `confdeltype='a'` (NO ACTION, no cascade) -- matters if anything ever needs
+  to delete a list programmatically.
+
+Validated the same way as watch-restore: unit tests (including a from-scratch
+in-memory fake of the 3 real tables for `YamtrackListsTarget`, since mocking
+psycopg felt worse than just simulating the tables) + a real E2E round trip
+against the live server (write a throwaway list -> read it back -> restore it
+as a real Jellyfin collection -> verify -> delete both ends). Real backup
+dry-run against production also confirmed the read/plan side at full scale:
+370 real collections, 7,138/7,138 members resolved.
+
 ## Conventions
 
 - Dry-run-then-confirm is load-bearing, not a suggestion — mirrors the

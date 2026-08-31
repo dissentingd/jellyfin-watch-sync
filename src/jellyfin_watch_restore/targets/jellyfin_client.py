@@ -38,6 +38,13 @@ class LibraryItem:
     series_id: str | None = None
     season_number: int | None = None
     episode_number: int | None = None
+    item_type: str = ""
+
+
+@dataclass(frozen=True)
+class JellyfinCollection:
+    collection_id: str
+    name: str
 
 
 class JellyfinClient:
@@ -117,6 +124,31 @@ class JellyfinClient:
         })
         return [self._to_library_item(i) for i in raw]
 
+    def collections(self) -> list[JellyfinCollection]:
+        raw = self._paginated_items({"IncludeItemTypes": "BoxSet", "Recursive": "true"})
+        return [JellyfinCollection(collection_id=i["Id"], name=i.get("Name", "")) for i in raw]
+
+    def collection_members(self, collection_id: str) -> list[LibraryItem]:
+        """A collection's direct children -- movies or whole series (not
+        individual episodes; Jellyfin collections group at that granularity)."""
+        raw = self._paginated_items({"ParentId": collection_id, "Fields": "ProviderIds"})
+        return [self._to_library_item(i) for i in raw]
+
+    def create_collection(self, name: str, item_ids: list[str]) -> str:
+        """Creates a new collection with the given items as initial members.
+        Returns the new collection's Jellyfin item id."""
+        resp = self._request_with_retry(
+            "POST", "/Collections", params={"Name": name, "Ids": ",".join(item_ids)},
+        )
+        return resp.json()["Id"]
+
+    def add_to_collection(self, collection_id: str, item_ids: list[str]) -> None:
+        if not item_ids:
+            return
+        self._request_with_retry(
+            "POST", f"/Collections/{collection_id}/Items", params={"Ids": ",".join(item_ids)},
+        )
+
     def mark_played(self, item_id: str, date_played: datetime) -> None:
         """Sets Played=true AND the specific historical DatePlayed -- confirmed
         (against a live server, with read-back verification) that this actually
@@ -140,4 +172,5 @@ class JellyfinClient:
             series_id=raw.get("SeriesId"),
             season_number=raw.get("ParentIndexNumber"),
             episode_number=raw.get("IndexNumber"),
+            item_type=(raw.get("Type") or "").rsplit(".", 1)[-1],
         )

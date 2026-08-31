@@ -15,6 +15,9 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
+from .collections.plan import CollectionPlan
+from .collections.sources import JellyfinCollectionsSource, YamtrackListsSource
+from .collections.targets import JellyfinCollectionsTarget, YamtrackListsTarget
 from .models import WatchRecord
 from .plan import ActionOutcome, RestorePlan
 from .sources import GenericCsvSource, JellyfinBackupSource, YamtrackCsvSource
@@ -22,7 +25,7 @@ from .sources.base import Source
 from .targets.jellyfin import JellyfinTarget
 from .targets.jellyfin_client import JellyfinClient
 
-app = typer.Typer(help="Restore watch history into Jellyfin from another source.")
+app = typer.Typer(help="Restore watch history (and collections) into Jellyfin from another source.")
 console = Console()
 
 
@@ -142,6 +145,112 @@ def _print_plan(plan: RestorePlan, *, sample: int) -> None:
             se = f"S{r.season}E{r.episode}" if r.season is not None else ""
             table.add_row(r.title or "?", str(r.tmdb_id), se, u.reason)
         console.print(table)
+
+
+@app.command()
+def backup_collections(
+    jellyfin_url: Annotated[str, typer.Option(envvar="JELLYFIN_URL")],
+    jellyfin_api_key: Annotated[str, typer.Option(envvar="JELLYFIN_API_KEY")],
+    jellyfin_user_id: Annotated[str, typer.Option(envvar="JELLYFIN_USER_ID")],
+    yamtrack_dsn: Annotated[str, typer.Option(envvar="YAMTRACK_DSN", help="Postgres DSN for YAMTrack's database.")],
+    yamtrack_user_id: Annotated[int, typer.Option(envvar="YAMTRACK_USER_ID", help="YAMTrack users_user.id to own the backed-up lists.")],
+    apply: Annotated[bool, typer.Option("--apply", help="Actually write to YAMTrack. Without this, only a plan is printed.")] = False,
+    sample: Annotated[int, typer.Option()] = 10,
+) -> None:
+    """Back up Jellyfin Collections into YAMTrack Lists (one List per Collection)."""
+    with JellyfinClient(jellyfin_url, jellyfin_api_key, jellyfin_user_id) as client:
+        source = JellyfinCollectionsSource(client)
+        with console.status(f"reading {source.describe()}..."):
+            records = list(source.records())
+    console.print(f"read {len(records)} collections from {source.describe()}")
+
+    target = YamtrackListsTarget(yamtrack_dsn, yamtrack_user_id)
+    with console.status("planning..."):
+        plan = target.plan(records)
+    plan.source_description = source.describe()
+
+    _print_collection_plan(plan, sample=sample)
+
+    if not apply:
+        console.print("\n[yellow]Dry run only -- pass --apply to actually write to YAMTrack.[/yellow]")
+        return
+    if not plan.actions:
+        console.print("\nNothing to apply.")
+        return
+
+    console.print(f"\n[bold]Applying {len(plan.actions)} collection(s)...[/bold]")
+    with console.status("writing to YAMTrack..."):
+        target.apply(plan)
+    _print_apply_results(plan, sample=sample)
+
+
+@app.command()
+def restore_collections(
+    yamtrack_dsn: Annotated[str, typer.Option(envvar="YAMTRACK_DSN")],
+    yamtrack_user_id: Annotated[int, typer.Option(envvar="YAMTRACK_USER_ID", help="YAMTrack users_user.id whose Lists to read.")],
+    jellyfin_url: Annotated[str, typer.Option(envvar="JELLYFIN_URL")],
+    jellyfin_api_key: Annotated[str, typer.Option(envvar="JELLYFIN_API_KEY")],
+    jellyfin_user_id: Annotated[str, typer.Option(envvar="JELLYFIN_USER_ID")],
+    apply: Annotated[bool, typer.Option("--apply", help="Actually write to Jellyfin. Without this, only a plan is printed.")] = False,
+    sample: Annotated[int, typer.Option()] = 10,
+) -> None:
+    """Restore YAMTrack Lists into Jellyfin as Collections. Never destructive:
+    an existing collection with a matching name is only ever added to."""
+    source = YamtrackListsSource(yamtrack_dsn, yamtrack_user_id)
+    with console.status(f"reading {source.describe()}..."):
+        records = list(source.records())
+    console.print(f"read {len(records)} lists from {source.describe()}")
+
+    with JellyfinClient(jellyfin_url, jellyfin_api_key, jellyfin_user_id) as client:
+        target = JellyfinCollectionsTarget(client)
+        with console.status("fetching current Jellyfin library and collections..."):
+            plan = target.plan(records)
+        plan.source_description = source.describe()
+
+        _print_collection_plan(plan, sample=sample)
+
+        if not apply:
+            console.print("\n[yellow]Dry run only -- pass --apply to actually write to Jellyfin.[/yellow]")
+            return
+        if not plan.actions:
+            console.print("\nNothing to apply.")
+            return
+
+        console.print(f"\n[bold]Applying {len(plan.actions)} collection(s)...[/bold]")
+        with console.status("writing to Jellyfin..."):
+            target.apply(plan)
+        _print_apply_results(plan, sample=sample)
+
+
+def _print_collection_plan(plan: CollectionPlan, *, sample: int) -> None:
+    console.print(f"\n[bold]{plan.summary()}[/bold]\n")
+
+    if plan.actions:
+        table = Table(title=f"Collections (showing up to {sample})")
+        table.add_column("Name")
+        table.add_column("Members")
+        table.add_column("Resolved")
+        table.add_column("Status")
+        for a in plan.actions[:sample]:
+            status = "update existing" if a.existing_target_id else "create new"
+            table.add_row(a.record.name, str(len(a.members)), str(len(a.matched_ids)), status)
+        console.print(table)
+
+    if plan.skipped_empty:
+        console.print(
+            f"\n[yellow]{len(plan.skipped_empty)} collection(s) skipped entirely "
+            f"-- no members resolved (showing up to {sample}):[/yellow]"
+        )
+        for r in plan.skipped_empty[:sample]:
+            console.print(f"  {r.name} ({len(r.members)} member(s), none matched)")
+
+
+def _print_apply_results(plan: CollectionPlan, *, sample: int) -> None:
+    applied = sum(1 for a in plan.actions if a.outcome is ActionOutcome.APPLIED)
+    failed = [a for a in plan.actions if a.outcome is ActionOutcome.FAILED]
+    console.print(f"applied: {applied}   failed: {len(failed)}")
+    for a in failed[:sample]:
+        console.print(f"  [red]FAILED[/red] {a.record.name}: {a.error}")
 
 
 if __name__ == "__main__":
