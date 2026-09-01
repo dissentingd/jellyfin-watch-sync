@@ -9,9 +9,9 @@ from datetime import UTC, datetime
 
 import pytest
 
-from jellyfin_watch_restore.models import MediaType, WatchRecord
-from jellyfin_watch_restore.plan import ActionOutcome
-from jellyfin_watch_restore.targets.yamtrack_history import YamtrackHistoryTarget
+from jellyfin_watch_sync.models import MediaType, WatchRecord
+from jellyfin_watch_sync.plan import ActionOutcome
+from jellyfin_watch_sync.targets.yamtrack_history import YamtrackHistoryTarget
 
 
 class FakeDb:

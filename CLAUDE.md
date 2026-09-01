@@ -1,4 +1,4 @@
-# jellyfin-watch-restore
+# jellyfin-watch-sync
 
 Standalone open-source CLI: syncs watch history between Jellyfin and another
 tracker in either direction — `restore` (into Jellyfin, from a YAMTrack
@@ -18,7 +18,7 @@ over a custom fix, since [no existing tool fills this gap](https://github.com/je
 (checked before building, not assumed).
 
 **Repo:** private for now (flip to public once proven against a real restore
-run) — `gh repo view dissentingd/jellyfin-watch-restore`.
+run) — `gh repo view dissentingd/jellyfin-watch-sync`.
 
 ## Setup / run
 
@@ -30,8 +30,8 @@ pytest
 ruff check .
 ```
 
-CLI entry point: `jellyfin-watch-restore` (see README.md for usage). Also
-runnable unpackaged: `python -m jellyfin_watch_restore.cli --help`.
+CLI entry point: `jellyfin-watch-sync` (see README.md for usage). Also
+runnable unpackaged: `python -m jellyfin_watch_sync.cli --help`.
 
 ## Architecture
 
@@ -59,7 +59,7 @@ existing import/export plumbing (confirmed by reading the actual export/import
 code before building anything, same diligence as the watch-history feature).
 Lives in `collections/` (yes, same name as the stdlib module — confirmed
 empirically this doesn't shadow it; Python 3's absolute-import-by-default
-means `jellyfin_watch_restore.collections` never collides with bare `import
+means `jellyfin_watch_sync.collections` never collides with bare `import
 collections`). Mirrors the watch-history Source/Target shape but as its own
 parallel ABC pair (`CollectionSource`/`CollectionTarget`), since it's typed
 around `CollectionRecord` not `WatchRecord`:
@@ -190,7 +190,7 @@ pushed). Skipped, still not selected: item 1 (flip repo public) and item 4
 5. ~~**Docker image.**~~ DONE — `Dockerfile` (python:3.12-slim, bundles
    `yamtrack-db` by default, non-root, `ENTRYPOINT` is the console script),
    `.dockerignore`, `.github/workflows/release.yml` (tests+ruff then builds
-   and pushes `ghcr.io/dissentingd/jellyfin-watch-restore` on a `v*.*.*` tag,
+   and pushes `ghcr.io/dissentingd/jellyfin-watch-sync` on a `v*.*.*` tag,
    cuts a GitHub Release), `.env`-file support via `main()` calling
    `load_dotenv(find_dotenv(usecwd=True))` before Typer runs. Verified for
    real: built on PlexBox (`10.10.4.50`, no local Docker available),

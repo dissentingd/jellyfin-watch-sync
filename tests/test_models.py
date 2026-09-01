@@ -3,7 +3,7 @@ from datetime import UTC, datetime
 import pytest
 from pydantic import ValidationError
 
-from jellyfin_watch_restore.models import MediaType, WatchRecord
+from jellyfin_watch_sync.models import MediaType, WatchRecord
 
 
 def test_movie_record_valid():

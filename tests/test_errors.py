@@ -1,7 +1,7 @@
 import httpx
 import pytest
 
-from jellyfin_watch_restore.errors import describe_error
+from jellyfin_watch_sync.errors import describe_error
 
 
 def _http_status_error(status: int, url: str = "http://jellyfin.test/Users/x/Items") -> httpx.HTTPStatusError:

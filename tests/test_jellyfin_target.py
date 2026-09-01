@@ -8,10 +8,10 @@ from datetime import UTC, datetime
 import httpx
 import pytest
 
-from jellyfin_watch_restore.models import MediaType, WatchRecord
-from jellyfin_watch_restore.plan import ActionOutcome
-from jellyfin_watch_restore.targets.jellyfin import JellyfinTarget
-from jellyfin_watch_restore.targets.jellyfin_client import JellyfinClient
+from jellyfin_watch_sync.models import MediaType, WatchRecord
+from jellyfin_watch_sync.plan import ActionOutcome
+from jellyfin_watch_sync.targets.jellyfin import JellyfinTarget
+from jellyfin_watch_sync.targets.jellyfin_client import JellyfinClient
 
 MOVIES = {
     "TotalRecordCount": 1,

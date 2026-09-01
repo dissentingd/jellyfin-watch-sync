@@ -5,10 +5,10 @@ the format being "generic" rather than YAMTrack-specific."""
 
 from datetime import UTC, datetime
 
-from jellyfin_watch_restore.models import MediaType, WatchRecord
-from jellyfin_watch_restore.plan import ActionOutcome
-from jellyfin_watch_restore.sources.generic_csv import GenericCsvSource
-from jellyfin_watch_restore.targets.generic_csv import GenericCsvTarget
+from jellyfin_watch_sync.models import MediaType, WatchRecord
+from jellyfin_watch_sync.plan import ActionOutcome
+from jellyfin_watch_sync.sources.generic_csv import GenericCsvSource
+from jellyfin_watch_sync.targets.generic_csv import GenericCsvTarget
 
 
 def test_writes_header_and_rows(tmp_path):

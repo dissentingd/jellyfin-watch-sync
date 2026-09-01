@@ -1,7 +1,7 @@
 import pytest
 from pydantic import ValidationError
 
-from jellyfin_watch_restore.collections.models import (
+from jellyfin_watch_sync.collections.models import (
     CollectionMember,
     CollectionMemberType,
     CollectionRecord,

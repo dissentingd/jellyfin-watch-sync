@@ -7,7 +7,7 @@ import re
 import httpx
 from typer.testing import CliRunner
 
-from jellyfin_watch_restore.cli import app
+from jellyfin_watch_sync.cli import app
 
 runner = CliRunner()
 

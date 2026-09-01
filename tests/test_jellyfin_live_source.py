@@ -10,9 +10,9 @@ import re
 import httpx
 import pytest
 
-from jellyfin_watch_restore.models import MediaType
-from jellyfin_watch_restore.sources.jellyfin_live import JellyfinLiveSource
-from jellyfin_watch_restore.targets.jellyfin_client import JellyfinClient
+from jellyfin_watch_sync.models import MediaType
+from jellyfin_watch_sync.sources.jellyfin_live import JellyfinLiveSource
+from jellyfin_watch_sync.targets.jellyfin_client import JellyfinClient
 
 MOVIES = {
     "TotalRecordCount": 1,

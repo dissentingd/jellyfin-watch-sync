@@ -68,7 +68,7 @@ class YamtrackHistoryTarget(Target):
         except ImportError as exc:
             raise ImportError(
                 "YamtrackHistoryTarget requires the 'yamtrack-db' extra: "
-                "pip install jellyfin-watch-restore[yamtrack-db]"
+                "pip install jellyfin-watch-sync[yamtrack-db]"
             ) from exc
 
         # Two bulk queries, not one query per record -- mirrors

@@ -5,21 +5,21 @@ and loads a .env relative to the real working directory before app() runs."""
 
 from unittest.mock import Mock, patch
 
-from jellyfin_watch_restore.cli import main
+from jellyfin_watch_sync.cli import main
 
 
 def test_main_loads_dotenv_before_running_app():
     call_order = []
     with (
         patch(
-            "jellyfin_watch_restore.cli.find_dotenv",
+            "jellyfin_watch_sync.cli.find_dotenv",
             side_effect=lambda usecwd: call_order.append("find_dotenv") or "/fake/.env",
         ) as mock_find_dotenv,
         patch(
-            "jellyfin_watch_restore.cli.load_dotenv",
+            "jellyfin_watch_sync.cli.load_dotenv",
             side_effect=lambda path: call_order.append("load_dotenv"),
         ) as mock_load_dotenv,
-        patch("jellyfin_watch_restore.cli.app", Mock(side_effect=lambda: call_order.append("app"))) as mock_app,
+        patch("jellyfin_watch_sync.cli.app", Mock(side_effect=lambda: call_order.append("app"))) as mock_app,
     ):
         main()
 
