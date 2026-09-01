@@ -29,6 +29,41 @@ pip install jellyfin-watch-restore
 pip install "jellyfin-watch-restore[yamtrack-db]"
 ```
 
+### Docker
+
+A published image is planned at `ghcr.io/dissentingd/jellyfin-watch-restore`
+once this repo has its first tagged release; for now, build it locally from
+a checkout:
+
+```bash
+docker build -t jellyfin-watch-restore .
+```
+
+The image bundles the `yamtrack-db` extra by default, runs as a non-root
+user, and is invoked the same way as the installed CLI — `docker run
+jellyfin-watch-restore --help` behaves the same as running the tool bare.
+
+Credentials via `.env` file (recommended for Docker/compose over long
+`--jellyfin-*` flag lists — see [Getting your Jellyfin
+credentials](#getting-your-jellyfin-credentials) below for what goes in it):
+
+```bash
+docker run --rm \
+  -v "$(pwd)/.env:/app/.env:ro" \
+  -v "$(pwd)/yamtrack-export.csv:/app/history.csv:ro" \
+  jellyfin-watch-restore restore \
+  --source-type yamtrack-csv --source-path /app/history.csv --apply
+```
+
+The `.env` file must be mounted at **`/app/.env`** — that's the image's
+`WORKDIR`, which is where the entry point looks for it. Environment
+variables passed directly with `docker run -e` work too and take the usual
+precedence over a `.env` file.
+
+If your Jellyfin server is only reachable by its Docker network alias (e.g.
+you're also running Jellyfin in Docker), add `--network <that network>` to
+the `docker run` command so the container can resolve it.
+
 ## Usage
 
 Every run computes and prints a plan first. **Nothing is written to Jellyfin
