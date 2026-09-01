@@ -1,8 +1,11 @@
 # jellyfin-watch-restore
 
-Standalone open-source CLI: restores watch history into Jellyfin from a
-YAMTrack export/database, a generic CSV, or an older Jellyfin backup —
-matching by TMDB id so it survives files being relocated/renamed/re-organized
+Standalone open-source CLI: syncs watch history between Jellyfin and another
+tracker in either direction — `restore` (into Jellyfin, from a YAMTrack
+export/database, a generic CSV, or an older Jellyfin backup) and `backup`
+(out of a live Jellyfin server, into YAMTrack's database or that same
+generic CSV) — matching by TMDB id so it survives files being
+relocated/renamed/re-organized
 (the exact problem that motivated this: `music-work`'s storage-consolidation
 project relocated a large share of the library, degrading Jellyfin's own
 live watch-state — see `../music-work/WATCH-TRACKER-HANDOFF.md` §7/§10 for
@@ -42,8 +45,11 @@ runnable unpackaged: `python -m jellyfin_watch_restore.cli --help`.
   against the live OpenAPI spec). Matches by TMDB id client-side instead.
 - `targets/jellyfin.py` — the matching + idempotency-safeguard logic (never
   regress an already-newer watch date; `--force` to override).
-- `plan.py` — the dry-run-first data model; `cli.py`'s `restore` command
-  always computes a plan and only writes with `--apply`.
+- `plan.py` — the dry-run-first data model; `cli.py`'s `restore`/`backup`
+  commands always compute a plan and only write with `--apply`.
+- `targets/` also has the reverse direction's write targets
+  (`generic_csv.py`, `yamtrack_history.py` — see "Backup" section below),
+  read by `cli.py`'s `backup` command via `sources/jellyfin_live.py`.
 
 ## Collections (added 2026-08-26)
 
@@ -95,6 +101,70 @@ independent of Jellyfin. The *restore* direction is proven correct
 (mocked + a throwaway real round-trip) but has NOT been run for real against
 the full 372 -- only do that deliberately, not as a "why not" afterthought,
 since unlike backup it writes into live Jellyfin.
+
+## Backup: Jellyfin -> tracker (added 2026-09-01, item 8)
+
+The reverse direction of watch-history restore. Motivated by a reasoning
+gap Dave caught directly: the *original* Jellyfin->YAMTrack watch-history
+backfill (the work that predates this tool entirely — see
+`../music-work/WATCH-TRACKER-HANDOFF.md`) was done with one-off scripts
+(`../music-work/scripts/{jf_stream,offline_jf_backup_to_yamtrack_csv,
+gap_fill_compute}.py`), while Collections already had both directions
+generalized into this tool from day one. This closes that asymmetry and
+retires those scripts' reason for existing.
+
+- `sources/jellyfin_live.py` (`JellyfinLiveSource`) — reads current watch
+  state directly from a *live* Jellyfin server via the existing
+  `JellyfinClient`, as opposed to `jellyfin_backup.py`'s file-based read of
+  the same kind of data. Same two-pass series-then-episodes design as the
+  backup-file source, same reason (an episode needs its series' TMDB id
+  resolved, and nothing guarantees series arrive before their episodes).
+- `targets/generic_csv.py` (`GenericCsvTarget`) — writes the same neutral
+  CSV schema `GenericCsvSource` already reads. Deliberately tracker-agnostic
+  output, not YAMTrack-specific, despite YAMTrack being the motivating
+  consumer — round-trip-tested against `GenericCsvSource` itself.
+- `targets/yamtrack_history.py` (`YamtrackHistoryTarget`) — writes directly
+  into YAMTrack's Postgres tables. More involved than `YamtrackListsTarget`
+  (Collections' equivalent): a movie is one level (`app_item` -> `app_movie`),
+  but an episode is three (`app_item`(tv) -> `app_tv` -> `app_item`(season)
+  -> `app_season` -> `app_item`(episode) -> `app_episode`), since YAMTrack
+  tracks a show, its seasons, and its episodes as separate rows. Schema
+  verified against the LIVE database before writing this, same discipline as
+  Collections — including an empirical spot-check (not assumed) that an
+  episode's own `app_item.media_id`, its season's, and its show's are all the
+  *same* value (the show's TMDB id). Idempotency check (skip/`--force`, same
+  semantics as `JellyfinTarget`) is two bulk `SELECT`s preloaded into memory,
+  not one query per record — matters at real scale (100k+ records), same
+  reasoning as `JellyfinLibraryIndex`'s build-once-then-resolve shape.
+  A freshly-created `app_tv`/`app_season` row defaults to status `'In
+  progress'`, never `'Completed'` — one played episode doesn't mean the rest
+  of the show/season was watched, and a Jellyfin crawl alone can't tell.
+- `cli.py`'s `backup` command mirrors `restore`; both now share a
+  `_finish_watch_command()` apply-and-report tail (extracted from `restore`
+  during this work, behavior-preserving — full suite stayed green through
+  the refactor).
+- A real bug caught by the CLI-level test, not by inspection: `backup`
+  originally validated `--target-type`/`--target-path`/`--yamtrack-dsn`
+  *after* doing the full live Jellyfin crawl, so a bad target arg only
+  surfaced at the very end. Fixed to validate first, matching `restore`
+  (which already built its source, and would hit its own `BadParameter`,
+  before opening any Jellyfin connection).
+
+**Validated 2026-09-01:** unit tests (`test_jellyfin_live_source.py`,
+`test_generic_csv_target.py` with a `GenericCsvSource` round trip,
+`test_yamtrack_history_target.py` with a from-scratch in-memory fake of all
+5 real tables, `test_cli_backup.py`) + real E2E dry runs against Dave's live
+infrastructure: `backup --target-type generic-csv` against live Jellyfin
+(real titles/dates read back correctly) and `backup --target-type
+yamtrack-db` against the real `seed` YAMTrack account via Docker on
+PlexBox's `saltbox` network (Postgres :5432 isn't reachable from outside
+PlexBox, same as everything else in that stack) — correctly distinguished
+1 already-current record from 19 needing an update against the real 4,141-row
+`app_movie` table. **Deliberately NOT run with `--apply` against the real
+account** — a read-only proof is a fundamentally different, reversible risk
+than a real write of potentially thousands of history rows into Dave's live
+tracking data; that's a separate ask, same as Collections' restore direction
+was held back from a full-scale real run for the identical reason.
 
 ## Next steps for general (non-Dave) usage — SCOPED 2026-08-27, items 2/3/5/6/7 DONE
 
