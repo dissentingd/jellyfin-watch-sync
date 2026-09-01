@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
+from dotenv import find_dotenv, load_dotenv
 from rich.console import Console
 from rich.table import Table
 
@@ -281,5 +282,31 @@ def _print_apply_results(plan: CollectionPlan, *, sample: int) -> None:
         console.print(f"  [red]FAILED[/red] {a.record.name}: {a.error}")
 
 
-if __name__ == "__main__":
+def main() -> None:
+    """The actual console-script entry point (see pyproject.toml).
+
+    Loads a `.env` file from the current directory (if present) into the
+    environment *before* Typer parses anything, so JELLYFIN_URL/etc. can
+    live in a file instead of being re-exported every session. This is a
+    convenience for bare/local usage -- Docker users get the same effect
+    natively via `docker run --env-file` / compose's `env_file:`, which
+    inject real environment variables directly and don't need this at all.
+    A real environment variable always wins over a `.env` value if both
+    are set (`override=False`, dotenv's default).
+
+    Resolving the path via `find_dotenv(usecwd=True)` first, rather than
+    calling bare `load_dotenv()`, is required, not optional:
+    `load_dotenv()`'s own default search walks up from the *calling
+    frame's file location*, not the actual working directory -- for an
+    installed console script, that's somewhere under site-packages,
+    nowhere near wherever the user actually runs the command from.
+    Confirmed this the hard way (see test suite): without `usecwd=True`
+    passed to `find_dotenv`, a `.env` sitting right next to where the
+    command is run from is silently never found.
+    """
+    load_dotenv(find_dotenv(usecwd=True))
     app()
+
+
+if __name__ == "__main__":
+    main()

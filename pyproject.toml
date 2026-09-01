@@ -24,6 +24,7 @@ dependencies = [
     "typer>=0.12",
     "pydantic>=2.7",
     "rich>=13.7",
+    "python-dotenv>=1.0",
 ]
 
 [project.optional-dependencies]
@@ -35,7 +36,7 @@ Homepage = "https://github.com/dissentingd/jellyfin-watch-restore"
 Issues = "https://github.com/dissentingd/jellyfin-watch-restore/issues"
 
 [project.scripts]
-jellyfin-watch-restore = "jellyfin_watch_restore.cli:app"
+jellyfin-watch-restore = "jellyfin_watch_restore.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/jellyfin_watch_restore"]
