@@ -1,8 +1,9 @@
 """Command-line entry point.
 
-Safety model: `restore` ALWAYS computes and prints a plan first. Nothing is
-written to Jellyfin unless you pass --apply. This isn't a suggestion you have
-to remember -- it's the only way the command writes anything.
+Safety model: every write command (`restore`, `backup`, `*_collections`)
+ALWAYS computes and prints a plan first. Nothing is written to the target
+unless you pass --apply. This isn't a suggestion you have to remember --
+it's the only way any command writes anything.
 """
 
 from __future__ import annotations
@@ -23,12 +24,14 @@ from .collections.targets import JellyfinCollectionsTarget, YamtrackListsTarget
 from .errors import describe_error
 from .models import WatchRecord
 from .plan import ActionOutcome, RestorePlan
-from .sources import GenericCsvSource, JellyfinBackupSource, YamtrackCsvSource
+from .sources import GenericCsvSource, JellyfinBackupSource, JellyfinLiveSource, YamtrackCsvSource
 from .sources.base import Source
+from .targets.base import Target
+from .targets.generic_csv import GenericCsvTarget
 from .targets.jellyfin import JellyfinTarget
 from .targets.jellyfin_client import JellyfinClient
 
-app = typer.Typer(help="Restore watch history (and collections) into Jellyfin from another source.")
+app = typer.Typer(help="Sync watch history and collections between Jellyfin and another tracker.")
 console = Console()
 
 
@@ -62,6 +65,17 @@ class SourceType(str, Enum):
     jellyfin_backup = "jellyfin-backup"
 
 
+class HistoryTargetType(str, Enum):
+    """Where `backup` writes watch history OUT of Jellyfin to. Separate from
+    SourceType, which is where `restore` reads watch history from -- the two
+    aren't symmetric (there's no `jellyfin-backup` write direction, for
+    instance, and yamtrack-csv is read-only here since writing it just means
+    producing generic-csv and running it through YAMTrack's own importer)."""
+
+    yamtrack_db = "yamtrack-db"
+    generic_csv = "generic-csv"
+
+
 def _build_source(
     source_type: SourceType,
     source_path: Path | None,
@@ -88,6 +102,25 @@ def _build_source(
 
         return YamtrackDbSource(source_dsn, yamtrack_user_id)
     raise AssertionError(source_type)  # pragma: no cover
+
+
+def _build_history_target(
+    target_type: HistoryTargetType,
+    target_path: Path | None,
+    yamtrack_dsn: str | None,
+    yamtrack_user_id: int | None,
+) -> Target:
+    if target_type is HistoryTargetType.generic_csv:
+        if target_path is None:
+            raise typer.BadParameter("--target-path is required for generic-csv")
+        return GenericCsvTarget(target_path)
+    if target_type is HistoryTargetType.yamtrack_db:
+        if not yamtrack_dsn or yamtrack_user_id is None:
+            raise typer.BadParameter("--yamtrack-dsn and --yamtrack-user-id are required for yamtrack-db")
+        from .targets.yamtrack_history import YamtrackHistoryTarget  # optional extra
+
+        return YamtrackHistoryTarget(yamtrack_dsn, yamtrack_user_id)
+    raise AssertionError(target_type)  # pragma: no cover
 
 
 @app.command()
@@ -126,24 +159,72 @@ def restore(
         plan.source_description = source.describe()
 
         _print_plan(plan, sample=sample)
+        _finish_watch_command(target, plan, apply=apply, sample=sample)
 
-        if not apply:
-            console.print("\n[yellow]Dry run only -- pass --apply to actually write to Jellyfin.[/yellow]")
-            return
 
-        if not plan.matched:
-            console.print("\nNothing to apply.")
-            return
+@app.command()
+@_friendly_errors
+def backup(
+    target_type: Annotated[HistoryTargetType, typer.Option(help="Where watch history is written to.")],
+    jellyfin_url: Annotated[str, typer.Option(envvar="JELLYFIN_URL")],
+    jellyfin_api_key: Annotated[str, typer.Option(envvar="JELLYFIN_API_KEY")],
+    jellyfin_user_id: Annotated[str, typer.Option(envvar="JELLYFIN_USER_ID", help="Jellyfin user GUID whose watch history to back up.")],
+    target_path: Annotated[Path | None, typer.Option(help="Output CSV path, for --target-type=generic-csv.")] = None,
+    yamtrack_dsn: Annotated[str | None, typer.Option(envvar="YAMTRACK_DSN", help="Postgres DSN, for --target-type=yamtrack-db.")] = None,
+    yamtrack_user_id: Annotated[int | None, typer.Option(envvar="YAMTRACK_USER_ID", help="YAMTrack users_user.id to own the backed-up history, for --target-type=yamtrack-db.")] = None,
+    limit: Annotated[int | None, typer.Option(help="Only consider the first N records (for testing).")] = None,
+    force: Annotated[bool, typer.Option(help="For --target-type=yamtrack-db: overwrite even if YAMTrack's date is already as recent.")] = False,
+    apply: Annotated[bool, typer.Option("--apply", help="Actually write to the target. Without this, only a plan is printed.")] = False,
+    sample: Annotated[int, typer.Option(help="How many example matched records to print.")] = 10,
+) -> None:
+    """Plan (and optionally apply) backing up watch history OUT of Jellyfin
+    into another tracker -- the reverse of `restore`. Replaces the manual
+    "export a CSV, re-import it by hand" workflow this tool's own
+    development started with (see CLAUDE.md)."""
+    # Validate the target BEFORE doing a live Jellyfin crawl, not after --
+    # a bad --target-path/--yamtrack-dsn should fail immediately, not burn
+    # a full library read first only to error out at the very end.
+    target = _build_history_target(target_type, target_path, yamtrack_dsn, yamtrack_user_id)
 
-        console.print(f"\n[bold]Applying {len(plan.matched)} matched record(s)...[/bold]")
-        with console.status("writing to Jellyfin..."):
-            target.apply(plan)
+    with JellyfinClient(jellyfin_url, jellyfin_api_key, jellyfin_user_id) as client:
+        source = JellyfinLiveSource(client)
+        records: list[WatchRecord] = []
+        with console.status(f"reading {source.describe()}..."):
+            for i, record in enumerate(source.records()):
+                if limit is not None and i >= limit:
+                    break
+                records.append(record)
+    console.print(f"read {len(records)} watch records from {source.describe()}")
 
-        applied = sum(1 for m in plan.matched if m.outcome is ActionOutcome.APPLIED)
-        failed = [m for m in plan.matched if m.outcome is ActionOutcome.FAILED]
-        console.print(f"applied: {applied}   failed: {len(failed)}")
-        for f in failed[:sample]:
-            console.print(f"  [red]FAILED[/red] {f.record.title or f.record.tmdb_id}: {f.error}")
+    with console.status(f"planning against {target.describe()}..."):
+        plan = target.plan(records, force=force)
+    plan.source_description = source.describe()
+
+    _print_plan(plan, sample=sample)
+    _finish_watch_command(target, plan, apply=apply, sample=sample)
+
+
+def _finish_watch_command(target: Target, plan: RestorePlan, *, apply: bool, sample: int) -> None:
+    """The apply-and-report tail shared by `restore` and `backup` -- both
+    print the same dry-run notice, apply the same way, and report the same
+    per-record failures; only what `target` actually is differs."""
+    if not apply:
+        console.print(f"\n[yellow]Dry run only -- pass --apply to actually write to {target.describe()}.[/yellow]")
+        return
+
+    if not plan.matched:
+        console.print("\nNothing to apply.")
+        return
+
+    console.print(f"\n[bold]Applying {len(plan.matched)} matched record(s)...[/bold]")
+    with console.status(f"writing to {target.describe()}..."):
+        target.apply(plan)
+
+    applied = sum(1 for m in plan.matched if m.outcome is ActionOutcome.APPLIED)
+    failed = [m for m in plan.matched if m.outcome is ActionOutcome.FAILED]
+    console.print(f"applied: {applied}   failed: {len(failed)}")
+    for f in failed[:sample]:
+        console.print(f"  [red]FAILED[/red] {f.record.title or f.record.tmdb_id}: {f.error}")
 
 
 def _print_plan(plan: RestorePlan, *, sample: int) -> None:

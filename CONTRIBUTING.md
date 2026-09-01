@@ -54,6 +54,11 @@ anything, never needs to know what target it'll end up feeding. See
 `models.py` for the exact fields and validation rules (movies vs. episodes,
 season/episode requirements).
 
+If your source reads from a *live* system rather than a file/DB dump,
+`sources/jellyfin_live.py` (`JellyfinLiveSource`) is the reference — it's
+what `backup` uses to read current watch state straight out of Jellyfin,
+as opposed to `jellyfin_backup.py`'s file-based read of the same data.
+
 ## Adding a new target (e.g. Plex, Emby)
 
 A target is the other end — it takes `WatchRecord`s and knows how to restore
@@ -82,6 +87,16 @@ TMDB-id index both the watch-restore and collections-restore targets use,
 so the library only gets crawled once per run. Don't build a second,
 separate library-fetching path if this one already covers what you need.
 
+Two other targets are worth reading as references before writing your own:
+`targets/generic_csv.py` (`GenericCsvTarget`) is the simplest possible
+target — no existing state to check, every record always matched — and
+`targets/yamtrack_history.py` (`YamtrackHistoryTarget`) is the most
+involved, since a single episode write touches four distinct tables
+(`app_item`, used three times over, plus `app_tv`, `app_season`, and
+`app_episode`) with its own find-or-create chain and a bulk-preloaded
+idempotency check rather than one query per record — see its module
+docstring for why the query is batched.
+
 ## Adding a new source/target for Collections
 
 Same shape, separate ABC pair (`collections/base.py`:
@@ -103,9 +118,10 @@ trusting the existing queries to still be accurate on a newer YAMTrack.
   response sequence, since real calls don't always arrive in a fixed order).
 - For anything hitting YAMTrack's database, prefer a small in-memory fake of
   the actual tables over mocking `psycopg` directly — see
-  `tests/test_yamtrack_lists_target.py`'s `FakeDb`/`FakeCursor`. It caught a
-  real bug once (a `startswith()` table-name collision) that a scripted mock
-  wouldn't have.
+  `tests/test_yamtrack_lists_target.py`'s `FakeDb`/`FakeCursor` (3 tables) or
+  `tests/test_yamtrack_history_target.py`'s (5 tables, the multi-level
+  movie/tv/season/episode case) for the pattern. This caught a real bug once
+  (a `startswith()` table-name collision) that a scripted mock wouldn't have.
 - Every new `Target` needs at least one test proving `plan()` doesn't write
   anything and `apply()` correctly reports per-item outcomes (applied vs.
   failed), matching the existing tests' structure.

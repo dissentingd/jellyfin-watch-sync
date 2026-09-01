@@ -8,9 +8,10 @@ to change. See base.py for the interface.
 from .base import Source
 from .generic_csv import GenericCsvSource
 from .jellyfin_backup import JellyfinBackupSource
+from .jellyfin_live import JellyfinLiveSource
 from .yamtrack_csv import YamtrackCsvSource
 
-__all__ = ["GenericCsvSource", "JellyfinBackupSource", "Source", "YamtrackCsvSource"]
+__all__ = ["GenericCsvSource", "JellyfinBackupSource", "JellyfinLiveSource", "Source", "YamtrackCsvSource"]
 
 try:  # optional: only importable if the [yamtrack-db] extra is installed
     from .yamtrack_db import YamtrackDbSource  # noqa: F401

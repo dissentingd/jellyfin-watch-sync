@@ -39,6 +39,7 @@ class LibraryItem:
     season_number: int | None = None
     episode_number: int | None = None
     item_type: str = ""
+    play_count: int = 1
 
 
 @dataclass(frozen=True)
@@ -173,4 +174,5 @@ class JellyfinClient:
             season_number=raw.get("ParentIndexNumber"),
             episode_number=raw.get("IndexNumber"),
             item_type=(raw.get("Type") or "").rsplit(".", 1)[-1],
+            play_count=int(user_data.get("PlayCount") or 1),
         )

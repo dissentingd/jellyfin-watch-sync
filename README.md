@@ -1,8 +1,10 @@
 # jellyfin-watch-restore
 
-Restore watch history into Jellyfin from another source — a
-[YAMTrack](https://github.com/FuzzyGrim/Yamtrack) export or database, a generic
-CSV, or an older Jellyfin backup.
+Sync watch history between Jellyfin and another tracker, in either
+direction: **`restore`** brings watch history *into* Jellyfin from a
+[YAMTrack](https://github.com/FuzzyGrim/Yamtrack) export or database, a
+generic CSV, or an older Jellyfin backup; **`backup`** reads it back *out*
+of a live Jellyfin server into YAMTrack's database or that same generic CSV.
 
 Jellyfin doesn't have a way to do this itself. Watch state (`Played`,
 `LastPlayedDate`) lives on a library item, and library items are tied to the
@@ -66,8 +68,8 @@ the `docker run` command so the container can resolve it.
 
 ## Usage
 
-Every run computes and prints a plan first. **Nothing is written to Jellyfin
-unless you pass `--apply`.**
+Every run computes and prints a plan first. **Nothing is written to the
+target unless you pass `--apply`.**
 
 ### Getting your Jellyfin credentials
 
@@ -120,17 +122,49 @@ movie,68737,,,2019-03-12T23:32:00,1,Seventh Son
 episode,111111,1,1,2025-09-28,,Some Show S1E1
 ```
 
+### Backing up watch history OUT of Jellyfin
+
+`backup` is the reverse of `restore`: it reads current watch state directly
+from a *live* Jellyfin server and writes it somewhere else. Same
+plan-then-`--apply` safety model, same TMDB-id matching.
+
+```bash
+# Dump everything Jellyfin currently has watched into the generic CSV format
+jellyfin-watch-restore backup \
+  --target-type generic-csv --target-path ./jellyfin-watched.csv --apply
+
+# Or write it straight into YAMTrack's database
+jellyfin-watch-restore backup \
+  --target-type yamtrack-db \
+  --yamtrack-dsn "postgresql://yamtrack:...@host:5432/yamtrack" \
+  --yamtrack-user-id 4 --apply
+```
+
+| `--target-type` | What it writes | Extra options |
+|---|---|---|
+| `generic-csv` | The same neutral CSV format `--source-type generic-csv` reads — usable by any tool, not just YAMTrack | `--target-path` |
+| `yamtrack-db` | Directly into YAMTrack's Postgres database (needs the `yamtrack-db` extra) | `--yamtrack-dsn`, `--yamtrack-user-id` |
+
+`yamtrack-db` has the same already-current skip/`--force` behavior described
+below, checked against YAMTrack's existing data before writing anything.
+`generic-csv` always writes a fresh, complete file (there's no existing
+state in a bare CSV to check against) — think of it as a point-in-time
+export, not an incremental sync.
+
 ### Safety
 
 - `--apply` is required to write anything; without it you only get the plan.
-- A record is **skipped by default** if Jellyfin's current watched date for
-  that item is already at least as recent as what you're restoring — this
+- A record is **skipped by default** if the target's current watched date for
+  that item is already at least as recent as what's being written — this
   tool only fills gaps, it never regresses a legitimate newer watch. Pass
-  `--force` to override.
-- A record with no matching item currently in your Jellyfin library is
-  reported as **unmatched**, not silently dropped. TMDB-id matching survives
-  a file being moved or renamed; it can't survive the title being removed
-  from the library outright.
+  `--force` to override. (Doesn't apply to `--target-type generic-csv`,
+  which has no existing state to check against -- see above.)
+- For `restore`: a record with no matching item currently in your Jellyfin
+  library is reported as **unmatched**, not silently dropped. TMDB-id
+  matching survives a file being moved or renamed; it can't survive the
+  title being removed from the library outright. (`backup` has no
+  equivalent failure mode -- writing into YAMTrack or a CSV can always
+  create what it needs.)
 
 ## Version compatibility
 
