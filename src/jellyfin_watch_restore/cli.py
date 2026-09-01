@@ -7,6 +7,7 @@ to remember -- it's the only way the command writes anything.
 
 from __future__ import annotations
 
+import functools
 from enum import Enum
 from pathlib import Path
 from typing import Annotated
@@ -18,6 +19,7 @@ from rich.table import Table
 from .collections.plan import CollectionPlan
 from .collections.sources import JellyfinCollectionsSource, YamtrackListsSource
 from .collections.targets import JellyfinCollectionsTarget, YamtrackListsTarget
+from .errors import describe_error
 from .models import WatchRecord
 from .plan import ActionOutcome, RestorePlan
 from .sources import GenericCsvSource, JellyfinBackupSource, YamtrackCsvSource
@@ -27,6 +29,29 @@ from .targets.jellyfin_client import JellyfinClient
 
 app = typer.Typer(help="Restore watch history (and collections) into Jellyfin from another source.")
 console = Console()
+
+
+def _friendly_errors(fn):
+    """Wraps a command so a known misconfiguration (bad API key, bad user
+    id, unreachable server, wrong DSN) prints a plain-language diagnostic
+    and exits cleanly, instead of a raw traceback. Anything not recognized
+    by `describe_error` re-raises untouched -- this never hides an
+    unfamiliar error, only translates the common, expected ones."""
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except (typer.Exit, typer.BadParameter):
+            raise
+        except Exception as exc:
+            message = describe_error(exc)
+            if message is None:
+                raise
+            console.print(f"\n[red]{message}[/red]")
+            raise typer.Exit(code=1) from None
+
+    return wrapper
 
 
 class SourceType(str, Enum):
@@ -65,6 +90,7 @@ def _build_source(
 
 
 @app.command()
+@_friendly_errors
 def restore(
     source_type: Annotated[SourceType, typer.Option(help="Where watch history is read from.")],
     jellyfin_url: Annotated[str, typer.Option(envvar="JELLYFIN_URL")],
@@ -148,6 +174,7 @@ def _print_plan(plan: RestorePlan, *, sample: int) -> None:
 
 
 @app.command()
+@_friendly_errors
 def backup_collections(
     jellyfin_url: Annotated[str, typer.Option(envvar="JELLYFIN_URL")],
     jellyfin_api_key: Annotated[str, typer.Option(envvar="JELLYFIN_API_KEY")],
@@ -185,6 +212,7 @@ def backup_collections(
 
 
 @app.command()
+@_friendly_errors
 def restore_collections(
     yamtrack_dsn: Annotated[str, typer.Option(envvar="YAMTRACK_DSN")],
     yamtrack_user_id: Annotated[int, typer.Option(envvar="YAMTRACK_USER_ID", help="YAMTrack users_user.id whose Lists to read.")],
