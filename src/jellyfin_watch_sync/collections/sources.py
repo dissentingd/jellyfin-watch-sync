@@ -39,7 +39,7 @@ class JellyfinCollectionsSource(CollectionSource):
 
 class YamtrackListsSource(CollectionSource):
     """Reads YAMTrack's own Lists (CustomList/CustomListItem) -- the restore
-    direction. Optional (`pip install jellyfin-watch-restore[yamtrack-db]`)."""
+    direction. Optional (`pip install jellyfin-watch-sync[yamtrack-db]`)."""
 
     def __init__(self, dsn: str, user_id: int) -> None:
         """dsn: a standard Postgres connection string.
@@ -57,7 +57,7 @@ class YamtrackListsSource(CollectionSource):
         except ImportError as exc:
             raise ImportError(
                 "YamtrackListsSource requires the 'yamtrack-db' extra: "
-                "pip install jellyfin-watch-restore[yamtrack-db]"
+                "pip install jellyfin-watch-sync[yamtrack-db]"
             ) from exc
 
         sql = """

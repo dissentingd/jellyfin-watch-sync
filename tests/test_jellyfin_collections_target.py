@@ -7,14 +7,14 @@ import re
 import httpx
 import pytest
 
-from jellyfin_watch_restore.collections.models import (
+from jellyfin_watch_sync.collections.models import (
     CollectionMember,
     CollectionMemberType,
     CollectionRecord,
 )
-from jellyfin_watch_restore.collections.targets import JellyfinCollectionsTarget
-from jellyfin_watch_restore.plan import ActionOutcome
-from jellyfin_watch_restore.targets.jellyfin_client import JellyfinClient
+from jellyfin_watch_sync.collections.targets import JellyfinCollectionsTarget
+from jellyfin_watch_sync.plan import ActionOutcome
+from jellyfin_watch_sync.targets.jellyfin_client import JellyfinClient
 
 MOVIES = [{"Id": "movie-1", "Name": "Seventh Son", "ProviderIds": {"Tmdb": "68737"}}]
 SERIES = [{"Id": "series-1", "Name": "Some Show", "ProviderIds": {"Tmdb": "111111"}}]

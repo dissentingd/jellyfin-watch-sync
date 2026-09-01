@@ -1,5 +1,5 @@
-from jellyfin_watch_restore.models import MediaType
-from jellyfin_watch_restore.sources.yamtrack_csv import YamtrackCsvSource
+from jellyfin_watch_sync.models import MediaType
+from jellyfin_watch_sync.sources.yamtrack_csv import YamtrackCsvSource
 
 HEADER = (
     "media_id,source,media_type,title,image,season_number,episode_number,"

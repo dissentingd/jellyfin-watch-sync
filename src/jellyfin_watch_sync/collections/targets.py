@@ -122,7 +122,7 @@ class YamtrackListsTarget(CollectionTarget):
         except ImportError as exc:
             raise ImportError(
                 "YamtrackListsTarget requires the 'yamtrack-db' extra: "
-                "pip install jellyfin-watch-restore[yamtrack-db]"
+                "pip install jellyfin-watch-sync[yamtrack-db]"
             ) from exc
 
         with psycopg.connect(self.dsn) as conn, conn.cursor() as cur:

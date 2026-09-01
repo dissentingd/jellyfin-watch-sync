@@ -1,4 +1,4 @@
-# jellyfin-watch-restore
+# jellyfin-watch-sync
 
 Sync watch history between Jellyfin and another tracker, in either
 direction: **`restore`** brings watch history *into* Jellyfin from a
@@ -26,24 +26,24 @@ restores the watched flag and the original date.
 ## Install
 
 ```bash
-pip install jellyfin-watch-restore
+pip install jellyfin-watch-sync
 # or, for the direct-database YAMTrack source:
-pip install "jellyfin-watch-restore[yamtrack-db]"
+pip install "jellyfin-watch-sync[yamtrack-db]"
 ```
 
 ### Docker
 
-A published image is planned at `ghcr.io/dissentingd/jellyfin-watch-restore`
+A published image is planned at `ghcr.io/dissentingd/jellyfin-watch-sync`
 once this repo has its first tagged release; for now, build it locally from
 a checkout:
 
 ```bash
-docker build -t jellyfin-watch-restore .
+docker build -t jellyfin-watch-sync .
 ```
 
 The image bundles the `yamtrack-db` extra by default, runs as a non-root
 user, and is invoked the same way as the installed CLI — `docker run
-jellyfin-watch-restore --help` behaves the same as running the tool bare.
+jellyfin-watch-sync --help` behaves the same as running the tool bare.
 
 Credentials via `.env` file (recommended for Docker/compose over long
 `--jellyfin-*` flag lists — see [Getting your Jellyfin
@@ -53,7 +53,7 @@ credentials](#getting-your-jellyfin-credentials) below for what goes in it):
 docker run --rm \
   -v "$(pwd)/.env:/app/.env:ro" \
   -v "$(pwd)/yamtrack-export.csv:/app/history.csv:ro" \
-  jellyfin-watch-restore restore \
+  jellyfin-watch-sync restore \
   --source-type yamtrack-csv --source-path /app/history.csv --apply
 ```
 
@@ -97,11 +97,11 @@ export JELLYFIN_API_KEY="..."
 export JELLYFIN_USER_ID="..."   # the Jellyfin user GUID to restore watch state for
 
 # Dry run — see what would happen
-jellyfin-watch-restore restore \
+jellyfin-watch-sync restore \
   --source-type yamtrack-csv --source-path ./yamtrack-export.csv
 
 # Looks right? Apply it for real.
-jellyfin-watch-restore restore \
+jellyfin-watch-sync restore \
   --source-type yamtrack-csv --source-path ./yamtrack-export.csv --apply
 ```
 
@@ -130,11 +130,11 @@ plan-then-`--apply` safety model, same TMDB-id matching.
 
 ```bash
 # Dump everything Jellyfin currently has watched into the generic CSV format
-jellyfin-watch-restore backup \
+jellyfin-watch-sync backup \
   --target-type generic-csv --target-path ./jellyfin-watched.csv --apply
 
 # Or write it straight into YAMTrack's database
-jellyfin-watch-restore backup \
+jellyfin-watch-sync backup \
   --target-type yamtrack-db \
   --yamtrack-dsn "postgresql://yamtrack:...@host:5432/yamtrack" \
   --yamtrack-user-id 4 --apply
@@ -219,12 +219,12 @@ that's the granularity Jellyfin itself uses).
 
 ```bash
 # Back up all your Jellyfin collections into YAMTrack Lists
-jellyfin-watch-restore backup-collections \
+jellyfin-watch-sync backup-collections \
   --yamtrack-dsn "postgresql://yamtrack:...@host:5432/yamtrack" \
   --yamtrack-user-id 4 --apply
 
 # ... later, if Jellyfin's collections got damaged: restore them back
-jellyfin-watch-restore restore-collections \
+jellyfin-watch-sync restore-collections \
   --yamtrack-dsn "postgresql://yamtrack:...@host:5432/yamtrack" \
   --yamtrack-user-id 4 --apply
 ```

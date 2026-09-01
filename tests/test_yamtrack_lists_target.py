@@ -5,13 +5,13 @@ ON-CONFLICT-dedup behavior, which a fully scripted mock wouldn't."""
 
 import pytest
 
-from jellyfin_watch_restore.collections.models import (
+from jellyfin_watch_sync.collections.models import (
     CollectionMember,
     CollectionMemberType,
     CollectionRecord,
 )
-from jellyfin_watch_restore.collections.targets import YamtrackListsTarget
-from jellyfin_watch_restore.plan import ActionOutcome
+from jellyfin_watch_sync.collections.targets import YamtrackListsTarget
+from jellyfin_watch_sync.plan import ActionOutcome
 
 
 class FakeDb:

@@ -23,5 +23,5 @@ USER jwr
 # `restore-collections`), not a long-running service -- `docker run <image>
 # --help` should work the same as running the tool bare, and it does with
 # ENTRYPOINT set to the console script itself.
-ENTRYPOINT ["jellyfin-watch-restore"]
+ENTRYPOINT ["jellyfin-watch-sync"]
 CMD ["--help"]

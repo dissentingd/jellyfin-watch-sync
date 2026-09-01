@@ -4,7 +4,7 @@ hit a mid-crawl 502 with no retry, killing an otherwise-successful run."""
 import httpx
 import pytest
 
-from jellyfin_watch_restore.targets.jellyfin_client import JellyfinClient
+from jellyfin_watch_sync.targets.jellyfin_client import JellyfinClient
 
 
 @pytest.fixture
@@ -14,7 +14,7 @@ def client():
 
 
 def test_retries_502_then_succeeds(httpx_mock, client, monkeypatch):
-    monkeypatch.setattr("jellyfin_watch_restore.targets.jellyfin_client.time.sleep", lambda _: None)
+    monkeypatch.setattr("jellyfin_watch_sync.targets.jellyfin_client.time.sleep", lambda _: None)
     attempts = {"n": 0}
 
     def callback(request: httpx.Request) -> httpx.Response:
@@ -32,7 +32,7 @@ def test_retries_502_then_succeeds(httpx_mock, client, monkeypatch):
 
 
 def test_gives_up_after_max_retries(httpx_mock, client, monkeypatch):
-    monkeypatch.setattr("jellyfin_watch_restore.targets.jellyfin_client.time.sleep", lambda _: None)
+    monkeypatch.setattr("jellyfin_watch_sync.targets.jellyfin_client.time.sleep", lambda _: None)
     httpx_mock.add_response(status_code=502, is_reusable=True)
 
     with pytest.raises(httpx.HTTPStatusError):
@@ -40,7 +40,7 @@ def test_gives_up_after_max_retries(httpx_mock, client, monkeypatch):
 
 
 def test_does_not_retry_4xx(httpx_mock, client, monkeypatch):
-    monkeypatch.setattr("jellyfin_watch_restore.targets.jellyfin_client.time.sleep", lambda _: None)
+    monkeypatch.setattr("jellyfin_watch_sync.targets.jellyfin_client.time.sleep", lambda _: None)
     attempts = {"n": 0}
 
     def callback(request: httpx.Request) -> httpx.Response:

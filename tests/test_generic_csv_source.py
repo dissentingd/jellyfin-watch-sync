@@ -1,5 +1,5 @@
-from jellyfin_watch_restore.models import MediaType
-from jellyfin_watch_restore.sources.generic_csv import GenericCsvSource
+from jellyfin_watch_sync.models import MediaType
+from jellyfin_watch_sync.sources.generic_csv import GenericCsvSource
 
 CSV = """media_type,tmdb_id,season,episode,watched_at,play_count,title
 movie,68737,,,2019-03-12T23:32:00,1,Seventh Son

@@ -1,6 +1,6 @@
 """Reads watch history directly from YAMTrack's Postgres database.
 
-Optional (`pip install jellyfin-watch-restore[yamtrack-db]`) -- for anyone who'd
+Optional (`pip install jellyfin-watch-sync[yamtrack-db]`) -- for anyone who'd
 rather point this at their live YAMTrack DB than export/re-import a CSV. Only
 tmdb-sourced movies and episodes are considered, matching yamtrack_csv.py's
 same TMDB-only constraint (a title from Trakt/MAL/etc. has no TMDB id to match
@@ -19,7 +19,7 @@ try:
 except ImportError as exc:  # pragma: no cover - exercised only without the extra
     raise ImportError(
         "YamtrackDbSource requires the 'yamtrack-db' extra: "
-        "pip install jellyfin-watch-restore[yamtrack-db]"
+        "pip install jellyfin-watch-sync[yamtrack-db]"
     ) from exc
 
 _MOVIES_SQL = """

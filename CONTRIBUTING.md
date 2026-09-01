@@ -7,8 +7,8 @@ server should mean writing one new file, not touching existing code.
 ## Dev setup
 
 ```bash
-git clone https://github.com/dissentingd/jellyfin-watch-restore
-cd jellyfin-watch-restore
+git clone https://github.com/dissentingd/jellyfin-watch-sync
+cd jellyfin-watch-sync
 python -m venv .venv
 ./.venv/bin/python -m pip install -e ".[dev,yamtrack-db]"   # Linux/Mac
 ./.venv/Scripts/python.exe -m pip install -e ".[dev,yamtrack-db]"  # Windows
@@ -24,7 +24,7 @@ Both must pass before a PR is reviewed. CI runs both across Python 3.11–3.13.
 A source reads watch history from *somewhere* and yields `WatchRecord`s. To
 add one (say, a Trakt export):
 
-1. Create `src/jellyfin_watch_restore/sources/trakt.py`.
+1. Create `src/jellyfin_watch_sync/sources/trakt.py`.
 2. Implement the `Source` interface (`sources/base.py`):
    ```python
    from .base import Source

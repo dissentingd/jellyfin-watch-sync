@@ -5,8 +5,8 @@ resolution (see the source's own docstring) were collapsed into one pass."""
 
 import json
 
-from jellyfin_watch_restore.models import MediaType
-from jellyfin_watch_restore.sources.jellyfin_backup import JellyfinBackupSource
+from jellyfin_watch_sync.models import MediaType
+from jellyfin_watch_sync.sources.jellyfin_backup import JellyfinBackupSource
 
 USER_ID = "user-guid-1"
 MOVIE_ID = "movie-item-1"
