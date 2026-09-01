@@ -34,6 +34,26 @@ pip install "jellyfin-watch-restore[yamtrack-db]"
 Every run computes and prints a plan first. **Nothing is written to Jellyfin
 unless you pass `--apply`.**
 
+### Getting your Jellyfin credentials
+
+- **`JELLYFIN_URL`** — your server's base URL, e.g. `https://jellyfin.example.com`
+  or `http://localhost:8096`. No trailing path or slash.
+- **`JELLYFIN_API_KEY`** — Dashboard → **Advanced → API Keys** → the `+` button
+  to create a new one. Any key with server access works; this tool doesn't
+  need it scoped to a specific user.
+- **`JELLYFIN_USER_ID`** — the GUID of the *user* whose watch history you're
+  restoring (not necessarily the account the API key belongs to). Two ways
+  to find it:
+  - Dashboard → **Users** → click the user → the GUID is the last path
+    segment of the page's URL (`.../userprofile.html?userId=<THIS PART>`).
+  - Or query it directly: `curl -s https://jellyfin.example.com/Users \
+    -H 'Authorization: MediaBrowser Token="<your API key>"' | jq '.[] | {Name, Id}'`
+    — lists every user with their `Id`.
+
+Prefer environment variables over the equivalent `--jellyfin-*` CLI flags for
+these, especially the API key — CLI arguments are visible to other processes
+on the same machine (`ps`) and land in your shell history; env vars don't.
+
 ```bash
 export JELLYFIN_URL="https://jellyfin.example.com"
 export JELLYFIN_API_KEY="..."
@@ -76,6 +96,41 @@ episode,111111,1,1,2025-09-28,,Some Show S1E1
   reported as **unmatched**, not silently dropped. TMDB-id matching survives
   a file being moved or renamed; it can't survive the title being removed
   from the library outright.
+
+## Version compatibility
+
+Built and validated against **Jellyfin 10.11.11** and **YAMTrack** (the
+`ghcr.io/fuzzygrim/yamtrack:latest` image as of 2026-08). This ecosystem
+moves fast and this tool leans on specifics that have genuinely changed
+between versions, confirmed firsthand rather than assumed from older
+docs — if you're on a materially different version, expect to hit one of
+these:
+
+- **Jellyfin's `/Items` endpoint has no working `AnyProviderIdEquals`
+  filter** in 10.11.x, despite other tools (and older Jellyfin docs)
+  assuming it exists — confirmed missing from the live `/api-docs/openapi.json`
+  parameter list. This tool never relies on it (see below), so it isn't
+  affected by that gap either way, but it's worth knowing if you're
+  comparing this tool's approach to another one's.
+- **Jellyfin's Webhook plugin's manual "mark played" event is named
+  `UserDataSaved`, not `MarkPlayed`** — relevant only if you're pairing
+  this tool with a webhook-based live sync elsewhere, not to this tool's
+  own operation, but a real, confusing gotcha in this same ecosystem worth
+  flagging here since it tripped up this project's own earlier work.
+- **YAMTrack's database schema** (`app_item`, `lists_customlist`,
+  `lists_customlistitem`) is what `--source-type yamtrack-db` and the
+  `*-collections` commands depend on directly, verified against a live
+  install's actual `\d` output rather than assumed from YAMTrack's Django
+  models alone (see `CLAUDE.md`'s Collections section for the specific
+  constraints that mattered). YAMTrack has no versioned/stable public API
+  for this data — a future schema migration could change column names or
+  constraints without notice. If a `yamtrack-db` or `*-collections` command
+  fails with a raw SQL error, check whether your YAMTrack version's schema
+  still matches before assuming this tool is broken.
+
+If you hit a version-specific failure, please open an issue with your
+Jellyfin/YAMTrack versions — that's real, useful signal for widening
+compatibility, not noise.
 
 ## Why TMDB-id matching, not Jellyfin's own item id
 
