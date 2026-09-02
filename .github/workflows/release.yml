@@ -1,8 +1,11 @@
 name: Release
 
-# Builds and pushes a Docker image to GHCR on every version tag (v1.2.3-style).
-# Deliberately does NOT publish to PyPI -- that's a separate, not-yet-taken
-# decision (see CLAUDE.md's general-usage backlog).
+# Builds and pushes a Docker image to GHCR, and publishes to PyPI, on every
+# version tag (v1.2.3-style). PyPI publishing uses Trusted Publishing (OIDC)
+# -- no API token stored in this repo at all. That requires a one-time step
+# on PyPI's side first (pypi.org -> your account -> Publishing -> add a
+# pending publisher for this repo/workflow/environment) before the first tag
+# push will succeed; see CLAUDE.md's general-usage backlog for status.
 on:
   push:
     tags:
@@ -52,3 +55,27 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
+
+  pypi:
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write  # required for Trusted Publishing -- no API token needed
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run tests before building anything
+        run: |
+          pip install -e ".[dev,yamtrack-db]"
+          ruff check .
+          pytest -v
+
+      - run: pip install build twine
+      - run: python -m build
+      - run: twine check dist/*
+
+      - uses: pypa/gh-action-pypi-publish@release/v1
