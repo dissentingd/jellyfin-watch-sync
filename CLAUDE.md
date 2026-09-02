@@ -17,8 +17,11 @@ script, per Dave's explicit direction: reusable/"returnable to the community"
 over a custom fix, since [no existing tool fills this gap](https://github.com/jellyfin/jellyfin/discussions/11842)
 (checked before building, not assumed).
 
-**Repo:** private for now (flip to public once proven against a real restore
-run) — `gh repo view dissentingd/jellyfin-watch-sync`.
+**Repo:** public since 2026-09-02 — `gh repo view dissentingd/jellyfin-watch-sync`.
+Flipped public after a full git-history scan turned up no real credentials,
+passwords, or DSNs (`.env` was always gitignored; the only real-infra
+reference ever committed is a private LAN IP in this file's own validation
+notes, not exploitable from outside Dave's network).
 
 ## Setup / run
 
@@ -174,19 +177,38 @@ matches** — every real credential used during development/testing only ever
 appeared in invocations, never baked into the code. The tool itself has
 always been generic.
 
-Dave chose to proceed with items **2, 3, 5, 6, 7** below, later. **Items 2,
-3, 6, 7 done 2026-08-27; item 5 done 2026-09-01** (all verified, committed,
-pushed). Skipped, still not selected: item 1 (flip repo public) and item 4
-(publish to PyPI) — hold until further direction.
+Dave chose to proceed with items **2, 3, 5, 6, 7** below, later, then gave
+the go-ahead on **1 and 4 on 2026-09-02**. 1, 2, 3, 5, 6, 7 done; 4 is
+prepped in code and blocked only on Dave's own PyPI account verification.
 
-1. ~~Flip repo public~~ — not selected, hold.
+1. ~~Flip repo public~~ DONE 2026-09-02 — full git-history scan for leaked
+   credentials/secrets first (found none — `.env` always gitignored), then
+   `gh repo edit --visibility public`.
 2. ~~**README credential-discovery gap.**~~ DONE — "Getting your Jellyfin
    credentials" section added to README.md.
 3. ~~**Friendlier error handling on common misconfigurations.**~~ DONE —
    `errors.py`'s `describe_error()` + `cli.py`'s `_friendly_errors` decorator,
    covers 401/403/404/5xx, connect/timeout, and duck-typed psycopg errors.
    Tested (`test_errors.py`, `test_cli_errors.py`).
-4. ~~Publish to PyPI~~ — not selected, hold.
+4. **Publish to PyPI** — IN PROGRESS 2026-09-02, blocked on Dave's PyPI
+   account email verification, not code. Done already: confirmed the
+   `jellyfin-watch-sync` name is unclaimed on PyPI; built the sdist/wheel
+   locally and passed `twine check`; installed the actual built wheel into
+   a fresh venv and confirmed the CLI works from it (not just the editable
+   install); added a `pypi` job to `.github/workflows/release.yml` using
+   PyPI Trusted Publishing (OIDC) — no API token stored in this repo at
+   all, deliberately, since handling a real PyPI token isn't something to
+   do even if Dave offered one directly. **Remaining, Dave-only steps once
+   his account is verified:** on pypi.org, add a *pending* trusted
+   publisher for this project (Account → Publishing → add pending
+   publisher: owner `dissentingd`, repo `jellyfin-watch-sync`, workflow
+   `release.yml`, environment `pypi`) — this is what lets the first tag
+   push actually publish, since a pending publisher can be registered
+   before the project exists on PyPI at all. After that, tagging a release
+   (`v0.1.0`) triggers the actual publish; the GitHub Actions `pypi`
+   environment referenced in the workflow will auto-create with no
+   protection rules unless Dave adds manual-approval protection to it
+   separately (optional, not required).
 5. ~~**Docker image.**~~ DONE — `Dockerfile` (python:3.12-slim, bundles
    `yamtrack-db` by default, non-root, `ENTRYPOINT` is the console script),
    `.dockerignore`, `.github/workflows/release.yml` (tests+ruff then builds
