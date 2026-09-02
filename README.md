@@ -1,120 +1,170 @@
 # jellyfin-watch-sync
 
-Sync watch history between Jellyfin and another tracker, in either
-direction: **`restore`** brings watch history *into* Jellyfin from a
-[YAMTrack](https://github.com/FuzzyGrim/Yamtrack) export or database, a
-generic CSV, or an older Jellyfin backup; **`backup`** reads it back *out*
-of a live Jellyfin server into YAMTrack's database or that same generic CSV.
+**Reorganized your media library and now Jellyfin thinks you've never seen
+any of it?** This tool fixes that — it syncs your watch history (and
+Collections) between Jellyfin and [YAMTrack](https://github.com/FuzzyGrim/Yamtrack),
+in either direction, so a "watched" movie stays watched even after you move,
+rename, or re-encode the file.
 
-Jellyfin doesn't have a way to do this itself. Watch state (`Played`,
-`LastPlayedDate`) lives on a library item, and library items are tied to the
-physical file they were scanned from — move, rename, or replace a file (a
-quality upgrade, a re-organization, a `docker` volume rebuilt from scratch) and
-Jellyfin can treat the "same" movie as a brand-new item with no watch history,
-even though nothing about the movie's identity actually changed. There's an
-[open, unanswered discussion](https://github.com/jellyfin/jellyfin/discussions/11842)
-asking for exactly this, and Jellyfin 10.11 added
-[a real mitigation](https://github.com/jellyfin/jellyfin/pull/14262) for the
-simplest case (remove + re-add), but it doesn't cover everything — a file
-swapped for a different edition/cut still gets treated as new.
+You don't need to know Python, SQL, or how Jellyfin's API works to use this.
+If you can run a Docker container and copy a couple of values off a
+settings page, you can use this tool. (If you *do* know all that stuff,
+there's plenty of technical detail further down for you too.)
 
-This tool works around that from the outside: it reads watch history from
-wherever it's still intact, matches it to your **current** Jellyfin library by
-TMDB id (which survives file moves/renames — that's the whole point), and
-restores the watched flag and the original date.
+## The problem this solves
+
+Jellyfin remembers what you've watched by attaching that information to a
+specific file on disk. That works fine — until you reorganize your library,
+upgrade a movie to a better-quality version, or rebuild a Docker volume from
+scratch. The moment the file changes, Jellyfin can decide it's looking at a
+brand-new movie with no history, even though it's the exact same title you
+watched last year. All your "watched" checkmarks just vanish.
+
+This isn't a bug you did something wrong to cause — it's a real,
+[still-unanswered gap](https://github.com/jellyfin/jellyfin/discussions/11842)
+in how Jellyfin works. (Jellyfin 10.11 did add
+[a partial fix](https://github.com/jellyfin/jellyfin/pull/14262) for the
+simplest case, but plenty of real-world reorganizations still fall through
+the cracks.)
+
+**How this tool gets around it:** instead of relying on the file, it
+identifies every movie and episode by its TMDB ID — a permanent ID from
+[The Movie Database](https://www.themoviedb.org/) that never changes no
+matter what you rename or move the file to. It reads your watch history
+from wherever it's still intact (an older backup, a YAMTrack export,
+YAMTrack's own database) and writes it back onto whatever your Jellyfin
+library currently calls that same movie or episode — by TMDB ID, not by
+filename.
+
+## Is this safe to run?
+
+Yes, by design:
+
+- **It never touches anything on the first run.** Every command shows you
+  exactly what it *would* do — which movies and episodes, dated when — and
+  changes nothing until you explicitly add `--apply`.
+- **It never overwrites a newer "watched" date with an older one.** If
+  Jellyfin already shows a more recent watch than what you're restoring,
+  that item is skipped automatically.
+- **It never deletes anything.** Worst case if something goes wrong: a
+  watch date doesn't get set. It can't make your library disappear or wipe
+  out data that's already there.
+
+## Quick start (Docker)
+
+The fastest path if you just want to try it:
+
+```bash
+# 1. Build the image (a published one is coming with the first tagged release)
+git clone https://github.com/dissentingd/jellyfin-watch-sync
+cd jellyfin-watch-sync
+docker build -t jellyfin-watch-sync .
+
+# 2. Create a .env file with your Jellyfin details (see below for how to find these)
+cat > .env <<EOF
+JELLYFIN_URL=https://jellyfin.example.com
+JELLYFIN_API_KEY=your-api-key-here
+JELLYFIN_USER_ID=your-user-guid-here
+EOF
+
+# 3. See what a restore from a YAMTrack export would do (nothing is written yet)
+docker run --rm \
+  -v "$(pwd)/.env:/app/.env:ro" \
+  -v "$(pwd)/yamtrack-export.csv:/app/history.csv:ro" \
+  jellyfin-watch-sync restore \
+  --source-type yamtrack-csv --source-path /app/history.csv
+```
+
+If the plan it prints looks right, re-run the same command with `--apply`
+added at the end. That's the whole workflow — look, then confirm.
 
 ## Install
 
+Prefer to install it directly rather than use Docker? It's a regular Python
+package:
+
 ```bash
 pip install jellyfin-watch-sync
-# or, for the direct-database YAMTrack source:
+# or, if you want to connect straight to YAMTrack's database instead of a CSV export:
 pip install "jellyfin-watch-sync[yamtrack-db]"
 ```
 
-### Docker
-
-A published image is planned at `ghcr.io/dissentingd/jellyfin-watch-sync`
-once this repo has its first tagged release; for now, build it locally from
-a checkout:
+### Docker, in more detail
 
 ```bash
 docker build -t jellyfin-watch-sync .
 ```
 
-The image bundles the `yamtrack-db` extra by default, runs as a non-root
-user, and is invoked the same way as the installed CLI — `docker run
-jellyfin-watch-sync --help` behaves the same as running the tool bare.
+The image runs as a non-root user and includes everything needed for the
+direct-database YAMTrack option by default. `docker run jellyfin-watch-sync
+--help` behaves the same as running the tool without Docker at all.
 
-Credentials via `.env` file (recommended for Docker/compose over long
-`--jellyfin-*` flag lists — see [Getting your Jellyfin
-credentials](#getting-your-jellyfin-credentials) below for what goes in it):
+Credentials go in a `.env` file (shown in the quick start above) rather than
+long command-line flags — the file must be mounted at **`/app/.env`**
+specifically, since that's where the tool looks for it inside the
+container. Passing values with `docker run -e` works too, and takes
+priority over the `.env` file if both are present.
 
-```bash
-docker run --rm \
-  -v "$(pwd)/.env:/app/.env:ro" \
-  -v "$(pwd)/yamtrack-export.csv:/app/history.csv:ro" \
-  jellyfin-watch-sync restore \
-  --source-type yamtrack-csv --source-path /app/history.csv --apply
-```
-
-The `.env` file must be mounted at **`/app/.env`** — that's the image's
-`WORKDIR`, which is where the entry point looks for it. Environment
-variables passed directly with `docker run -e` work too and take the usual
-precedence over a `.env` file.
-
-If your Jellyfin server is only reachable by its Docker network alias (e.g.
-you're also running Jellyfin in Docker), add `--network <that network>` to
-the `docker run` command so the container can resolve it.
+If your Jellyfin server also runs in Docker and isn't reachable at a normal
+URL from other containers, add `--network <the network Jellyfin is on>` to
+the `docker run` command.
 
 ## Usage
 
-Every run computes and prints a plan first. **Nothing is written to the
-target unless you pass `--apply`.**
+Every command computes and prints a plan first, no matter what. **Nothing
+is written anywhere until you add `--apply`.**
 
 ### Getting your Jellyfin credentials
 
-- **`JELLYFIN_URL`** — your server's base URL, e.g. `https://jellyfin.example.com`
-  or `http://localhost:8096`. No trailing path or slash.
-- **`JELLYFIN_API_KEY`** — Dashboard → **Advanced → API Keys** → the `+` button
-  to create a new one. Any key with server access works; this tool doesn't
-  need it scoped to a specific user.
-- **`JELLYFIN_USER_ID`** — the GUID of the *user* whose watch history you're
-  restoring (not necessarily the account the API key belongs to). Two ways
-  to find it:
-  - Dashboard → **Users** → click the user → the GUID is the last path
-    segment of the page's URL (`.../userprofile.html?userId=<THIS PART>`).
-  - Or query it directly: `curl -s https://jellyfin.example.com/Users \
-    -H 'Authorization: MediaBrowser Token="<your API key>"' | jq '.[] | {Name, Id}'`
-    — lists every user with their `Id`.
+Three things, all found on your own Jellyfin server's admin pages:
 
-Prefer environment variables over the equivalent `--jellyfin-*` CLI flags for
-these, especially the API key — CLI arguments are visible to other processes
-on the same machine (`ps`) and land in your shell history; env vars don't.
+- **`JELLYFIN_URL`** — your server's web address, e.g.
+  `https://jellyfin.example.com` or `http://localhost:8096`. No trailing
+  slash.
+- **`JELLYFIN_API_KEY`** — a key that lets this tool talk to your server on
+  your behalf. Create one at Dashboard → **Advanced → API Keys** → the `+`
+  button. Any key works; it doesn't need to be tied to a specific user.
+- **`JELLYFIN_USER_ID`** — identifies *which user's* watch history you're
+  working with (Jellyfin servers can have multiple accounts). Two ways to
+  find it:
+  - Dashboard → **Users** → click your user → the ID is the last part of
+    the page's web address (`.../userprofile.html?userId=<THIS PART>`).
+  - Or, if you're comfortable with a terminal: `curl -s
+    https://jellyfin.example.com/Users -H 'Authorization: MediaBrowser
+    Token="<your API key>"' | jq '.[] | {Name, Id}'` lists every user on
+    the server with their ID.
+
+Once you have these three values, put them in a `.env` file (Docker) or
+export them as environment variables (installed CLI) rather than typing
+them as command-line flags each time — flags are visible to other programs
+running on the same machine and get saved in your shell's command history,
+which you don't want for an API key.
 
 ```bash
 export JELLYFIN_URL="https://jellyfin.example.com"
 export JELLYFIN_API_KEY="..."
-export JELLYFIN_USER_ID="..."   # the Jellyfin user GUID to restore watch state for
+export JELLYFIN_USER_ID="..."
 
-# Dry run — see what would happen
+# Dry run — see what would happen, nothing is written
 jellyfin-watch-sync restore \
   --source-type yamtrack-csv --source-path ./yamtrack-export.csv
 
-# Looks right? Apply it for real.
+# Looks right? Add --apply to actually do it
 jellyfin-watch-sync restore \
   --source-type yamtrack-csv --source-path ./yamtrack-export.csv --apply
 ```
 
-### Sources
+### Where `restore` can read watch history from
 
 | `--source-type` | What it reads | Extra options |
 |---|---|---|
 | `yamtrack-csv` | YAMTrack's own CSV export (Settings → Export) | `--source-path` |
 | `yamtrack-db` | YAMTrack's Postgres database directly | `--source-dsn`, `--yamtrack-user-id` (needs the `yamtrack-db` extra) |
-| `jellyfin-backup` | An older Jellyfin native backup (`.zip` or already-extracted dir) — restore from *before* a relocation/reorg damaged live watch state | `--source-path`, `--username` |
-| `generic-csv` | A simple hand-producible CSV — the escape hatch for any other tracker | `--source-path` |
+| `jellyfin-backup` | An older Jellyfin native backup (`.zip` or already-extracted folder) — useful when a reorganization damaged your *current* Jellyfin's watch state, but an older backup still has it intact | `--source-path`, `--username` |
+| `generic-csv` | A simple, hand-editable CSV — the fallback if your tracker isn't one of the above | `--source-path` |
 
-The generic CSV format:
+The generic CSV format, if you need to build one by hand or export it from
+somewhere this tool doesn't support directly:
 
 ```csv
 media_type,tmdb_id,season,episode,watched_at,play_count,title
@@ -122,14 +172,15 @@ movie,68737,,,2019-03-12T23:32:00,1,Seventh Son
 episode,111111,1,1,2025-09-28,,Some Show S1E1
 ```
 
-### Backing up watch history OUT of Jellyfin
+### Going the other way: backing watch history *out* of Jellyfin
 
-`backup` is the reverse of `restore`: it reads current watch state directly
-from a *live* Jellyfin server and writes it somewhere else. Same
-plan-then-`--apply` safety model, same TMDB-id matching.
+`backup` is the mirror image of `restore` — instead of reading from
+somewhere else and writing into Jellyfin, it reads your *current* Jellyfin
+watch history and writes it out to YAMTrack or a CSV file. Same
+look-then-confirm safety model.
 
 ```bash
-# Dump everything Jellyfin currently has watched into the generic CSV format
+# Save everything Jellyfin currently has marked watched into a CSV file
 jellyfin-watch-sync backup \
   --target-type generic-csv --target-path ./jellyfin-watched.csv --apply
 
@@ -142,80 +193,40 @@ jellyfin-watch-sync backup \
 
 | `--target-type` | What it writes | Extra options |
 |---|---|---|
-| `generic-csv` | The same neutral CSV format `--source-type generic-csv` reads — usable by any tool, not just YAMTrack | `--target-path` |
+| `generic-csv` | The same plain CSV format described above — readable by any tool, not just this one | `--target-path` |
 | `yamtrack-db` | Directly into YAMTrack's Postgres database (needs the `yamtrack-db` extra) | `--yamtrack-dsn`, `--yamtrack-user-id` |
 
-`yamtrack-db` has the same already-current skip/`--force` behavior described
-below, checked against YAMTrack's existing data before writing anything.
-`generic-csv` always writes a fresh, complete file (there's no existing
-state in a bare CSV to check against) — think of it as a point-in-time
-export, not an incremental sync.
+`yamtrack-db` has the same "don't overwrite something newer" protection
+described below. `generic-csv` always writes a complete, fresh file each
+time — think of it as a snapshot, not something that merges with a
+previous export.
 
-### Safety
+### Safety details
 
-- `--apply` is required to write anything; without it you only get the plan.
-- A record is **skipped by default** if the target's current watched date for
-  that item is already at least as recent as what's being written — this
-  tool only fills gaps, it never regresses a legitimate newer watch. Pass
-  `--force` to override. (Doesn't apply to `--target-type generic-csv`,
-  which has no existing state to check against -- see above.)
-- For `restore`: a record with no matching item currently in your Jellyfin
-  library is reported as **unmatched**, not silently dropped. TMDB-id
-  matching survives a file being moved or renamed; it can't survive the
-  title being removed from the library outright. (`backup` has no
-  equivalent failure mode -- writing into YAMTrack or a CSV can always
-  create what it needs.)
-
-## Version compatibility
-
-Built and validated against **Jellyfin 10.11.11** and **YAMTrack** (the
-`ghcr.io/fuzzygrim/yamtrack:latest` image as of 2026-08). This ecosystem
-moves fast and this tool leans on specifics that have genuinely changed
-between versions, confirmed firsthand rather than assumed from older
-docs — if you're on a materially different version, expect to hit one of
-these:
-
-- **Jellyfin's `/Items` endpoint has no working `AnyProviderIdEquals`
-  filter** in 10.11.x, despite other tools (and older Jellyfin docs)
-  assuming it exists — confirmed missing from the live `/api-docs/openapi.json`
-  parameter list. This tool never relies on it (see below), so it isn't
-  affected by that gap either way, but it's worth knowing if you're
-  comparing this tool's approach to another one's.
-- **Jellyfin's Webhook plugin's manual "mark played" event is named
-  `UserDataSaved`, not `MarkPlayed`** — relevant only if you're pairing
-  this tool with a webhook-based live sync elsewhere, not to this tool's
-  own operation, but a real, confusing gotcha in this same ecosystem worth
-  flagging here since it tripped up this project's own earlier work.
-- **YAMTrack's database schema** (`app_item`, `lists_customlist`,
-  `lists_customlistitem`) is what `--source-type yamtrack-db` and the
-  `*-collections` commands depend on directly, verified against a live
-  install's actual `\d` output rather than assumed from YAMTrack's Django
-  models alone (see `CLAUDE.md`'s Collections section for the specific
-  constraints that mattered). YAMTrack has no versioned/stable public API
-  for this data — a future schema migration could change column names or
-  constraints without notice. If a `yamtrack-db` or `*-collections` command
-  fails with a raw SQL error, check whether your YAMTrack version's schema
-  still matches before assuming this tool is broken.
-
-If you hit a version-specific failure, please open an issue with your
-Jellyfin/YAMTrack versions — that's real, useful signal for widening
-compatibility, not noise.
-
-## Why TMDB-id matching, not Jellyfin's own item id
-
-Jellyfin's `/Items` endpoint has no working "find by provider id" filter in
-current versions (checked against the live OpenAPI spec — `AnyProviderIdEquals`
-doesn't exist there, despite older tools/docs assuming it does). This tool
-fetches the library with `Fields=ProviderIds` and matches client-side instead
-— proven to work at real scale (500k+ item libraries).
+- `--apply` is required to write anything, always. Without it, you only
+  ever get a printed plan.
+- A record is **skipped automatically** if the target already shows a
+  watched date that's the same age or newer than what you're about to
+  write — this tool only ever fills in gaps, it never turns back the
+  clock on a legitimate, more recent watch. Add `--force` if you really do
+  want to overwrite it anyway. (This protection doesn't apply to
+  `--target-type generic-csv`, which has no prior state to compare
+  against.)
+- For `restore`: if a record doesn't match anything currently in your
+  Jellyfin library, it's reported as **unmatched** — you'll see it listed,
+  it's never silently skipped. Matching by TMDB ID survives the file being
+  moved or renamed, but not the title being removed from your library
+  entirely. (`backup` doesn't have this problem — writing into YAMTrack or
+  a CSV can always create whatever it needs.)
 
 ## Collections (Jellyfin BoxSets)
 
-Jellyfin Collections suffer the same file-relocation fragility as watch
-history, so this tool also backs them up into YAMTrack's Lists feature and
-restores them back — same TMDB-id matching, same dry-run-first discipline.
-A collection groups movies and/or whole series (not individual episodes --
-that's the granularity Jellyfin itself uses).
+Collections — the groupings you build in Jellyfin, like "Marvel Cinematic
+Universe" or "Christmas Movies" — suffer from the exact same
+file-relocation fragility as watch history. So this tool backs those up
+into YAMTrack's Lists feature too, and can restore them back the same way.
+A collection groups movies and/or whole TV series (not individual episodes
+— that's the level of detail Jellyfin itself uses for collections).
 
 ```bash
 # Back up all your Jellyfin collections into YAMTrack Lists
@@ -229,12 +240,64 @@ jellyfin-watch-sync restore-collections \
   --yamtrack-user-id 4 --apply
 ```
 
-Restoring is never destructive: a collection with a matching name already in
-Jellyfin is only ever added to (new members merged in), never replaced or
-pruned. Requires the `yamtrack-db` extra (direct Postgres access -- YAMTrack
-has no API/CSV path for Lists, same as it has none for watch history).
+Restoring is never destructive: if a collection with the same name already
+exists in Jellyfin, this only ever adds new members to it — it never
+removes or replaces anything already there. Requires the `yamtrack-db`
+extra either way, since YAMTrack has no CSV export for Lists (or for watch
+history) the way it does for other data.
+
+## If something isn't working: version compatibility
+
+Built and tested against **Jellyfin 10.11.11** and **YAMTrack** (the
+`ghcr.io/fuzzygrim/yamtrack:latest` image as of 2026-08). Both of these
+projects move fast, and this tool depends on some specifics that have
+genuinely changed between versions — confirmed firsthand, not assumed from
+documentation that might be out of date. If you're on a noticeably
+different version and something breaks, it's likely one of these known
+trouble spots, not a sign the tool is broadly broken:
+
+- **Jellyfin's `/Items` API has no working "find by provider ID" filter**
+  in 10.11.x, even though some other tools and older docs assume it
+  exists. This tool never relies on that filter in the first place (see
+  the technical note below for why), so it isn't affected by the gap
+  either way — but it's a real, confirmed difference worth knowing about
+  if you're comparing tools.
+- **Jellyfin's Webhook plugin calls its manual "mark played" event
+  `UserDataSaved`, not `MarkPlayed`** — only relevant if you're also
+  setting up a separate webhook-based sync elsewhere, not to this tool's
+  own operation. Flagged here because it's a genuinely confusing gotcha in
+  this ecosystem that tripped up this project's own earlier work.
+- **YAMTrack's database structure** is what the `yamtrack-db` option and
+  the `*-collections` commands rely on directly, checked against a real,
+  live install rather than assumed from YAMTrack's source code alone.
+  YAMTrack doesn't publish a stable, versioned API for this data, so a
+  future update to it could change something without warning. If a
+  `yamtrack-db` or `*-collections` command fails with a raw database
+  error, check whether your YAMTrack version's structure still matches
+  before assuming this tool itself is broken.
+
+Hit a version-specific problem? Please open an issue with your Jellyfin and
+YAMTrack versions — that's genuinely useful for widening what's supported,
+not noise.
+
+<details>
+<summary>Technical note: why TMDB ID matching instead of Jellyfin's own internal item ID</summary>
+
+Jellyfin's `/Items` endpoint has no working "find by provider ID" filter in
+current versions (checked directly against the live OpenAPI spec —
+`AnyProviderIdEquals` doesn't exist there, despite some older tools and
+docs assuming it does). This tool fetches the whole library with
+`Fields=ProviderIds` and matches against TMDB IDs client-side instead —
+proven to work at real scale, on libraries with 500,000+ items.
+
+</details>
 
 ## Development
+
+Want to add support for another tracker, another export format, or another
+media server? See [CONTRIBUTING.md](CONTRIBUTING.md) — the architecture is
+deliberately built so that means writing one new file, not modifying
+existing code.
 
 ```bash
 pip install -e ".[dev,yamtrack-db]"
