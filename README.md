@@ -11,6 +11,11 @@ If you can run a Docker container and copy a couple of values off a
 settings page, you can use this tool. (If you *do* know all that stuff,
 there's plenty of technical detail further down for you too.)
 
+**Prefer clicking buttons in a browser to typing commands?** See
+[jellyfin-watch-sync-xyops](https://github.com/dissentingd/jellyfin-watch-sync-xyops) —
+this same tool, pre-installed inside a web-based job runner with a login
+and four ready-to-click jobs, no command line required.
+
 ## The problem this solves
 
 Jellyfin remembers what you've watched by attaching that information to a
