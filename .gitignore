@@ -216,3 +216,6 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Internal working notes -- kept locally, not published
+CLAUDE.md
