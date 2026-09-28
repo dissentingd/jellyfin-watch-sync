@@ -86,4 +86,6 @@ def test_missing_target_path_is_a_clean_error_before_any_jellyfin_call(httpx_moc
     ])
 
     assert result.exit_code != 0
-    assert "--target-path" in result.output
+    # Strip ANSI codes: Rich colorizes output under GitHub Actions, splitting
+    # "--target-path" across escape sequences.
+    assert "--target-path" in re.sub(r"\x1b\[[0-9;]*m", "", result.output)
