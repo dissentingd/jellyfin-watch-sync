@@ -9,6 +9,14 @@ from typer.testing import CliRunner
 from jellyfin_watch_sync.cli import app
 
 runner = CliRunner()
+
+
+def _plain(output: str) -> str:
+    """Rich colorizes output under GitHub Actions, splitting option names
+    like --floppy-token with ANSI codes (same fix as test_cli_backup.py)."""
+    return re.sub(r"\x1b\[[0-9;]*m", "", output)
+
+
 JELLYFIN = ["--jellyfin-url", "http://jellyfin.test", "--jellyfin-api-key", "k", "--jellyfin-user-id", "u"]
 
 
@@ -18,7 +26,7 @@ def test_backup_floppy_api_needs_url_and_token_before_crawling(monkeypatch):
     # no httpx_mock responses registered: any request at all would fail the test
     result = runner.invoke(app, ["backup", "--target-type", "floppy-api", *JELLYFIN])
     assert result.exit_code == 2
-    assert "floppy-token" in result.output
+    assert "floppy-token" in _plain(result.output)
 
 
 def test_backup_collections_still_defaults_to_yamtrack(monkeypatch):
@@ -26,13 +34,13 @@ def test_backup_collections_still_defaults_to_yamtrack(monkeypatch):
     monkeypatch.delenv("YAMTRACK_USER_ID", raising=False)
     result = runner.invoke(app, ["backup-collections", *JELLYFIN])
     assert result.exit_code == 2
-    assert "yamtrack-dsn" in result.output
+    assert "yamtrack-dsn" in _plain(result.output)
 
 
 def test_restore_collections_floppy_csv_needs_a_path():
     result = runner.invoke(app, ["restore-collections", "--source-type", "floppy-csv", *JELLYFIN])
     assert result.exit_code == 2
-    assert "source-path" in result.output
+    assert "source-path" in _plain(result.output)
 
 
 def test_backup_to_floppy_is_a_dry_run_without_apply(httpx_mock):
