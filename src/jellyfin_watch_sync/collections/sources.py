@@ -1,10 +1,12 @@
-"""Sources of CollectionRecord: live Jellyfin (for backup) and YAMTrack's
-Lists table (for restore)."""
+"""Sources of CollectionRecord: live Jellyfin (for backup), and YAMTrack's
+Lists table or a Floppy CSV export's Lists (for restore)."""
 
 from __future__ import annotations
 
 from collections.abc import Iterator
+from pathlib import Path
 
+from ..sources.floppy_csv import open_floppy_csv
 from ..targets.jellyfin_client import JellyfinClient
 from .base import CollectionSource
 from .models import CollectionMember, CollectionMemberType, CollectionRecord
@@ -84,3 +86,67 @@ class YamtrackListsSource(CollectionSource):
                 )
         for list_id in list_order:
             yield lists[list_id]
+
+
+class FloppyCsvListsSource(CollectionSource):
+    """Reads Lists out of a Floppy CSV export -- the restore direction, with
+    no database access needed (Floppy can run on SQLite as well as Postgres,
+    so a DB-level reader like YamtrackListsSource wouldn't work for everyone).
+
+    Floppy writes one `list` row per List, then one `list_item` row per
+    member, tied together by `list_uid` (checked against Floppy's own
+    src/integrations/exports.py). Smart lists are included as they stand at
+    export time: their stored members become a plain Jellyfin collection.
+    """
+
+    def __init__(self, path: str | Path) -> None:
+        self.path = Path(path)
+
+    def describe(self) -> str:
+        return f"Floppy Lists (CSV export: {self.path})"
+
+    def records(self) -> Iterator[CollectionRecord]:
+        lists: dict[str, CollectionRecord] = {}
+        list_order: list[str] = []
+        seen: dict[str, set[tuple]] = {}
+
+        def ensure(uid: str, name: str, description: str = "") -> CollectionRecord | None:
+            if uid not in lists:
+                if not name.strip():
+                    return None
+                lists[uid] = CollectionRecord(name=name, description=description)
+                list_order.append(uid)
+                seen[uid] = set()
+            return lists[uid]
+
+        for row in open_floppy_csv(self.path):
+            row_type = row.get("row_type", "").strip()
+            uid = row.get("list_uid", "").strip()
+            if row_type == "list" and uid:
+                record = ensure(uid, row.get("list_name", ""), row.get("list_description", "") or "")
+                if record is not None and not record.description:
+                    record.description = row.get("list_description", "") or ""
+            elif row_type == "list_item" and uid:
+                # list rows always precede their items, but fall back to the
+                # list_name carried on the item row itself just in case.
+                record = ensure(uid, row.get("list_name", ""))
+                if record is None:
+                    continue
+                member_type = {"movie": CollectionMemberType.MOVIE, "tv": CollectionMemberType.SERIES}.get(
+                    row.get("media_type", "").strip().lower()
+                )
+                if member_type is None or row.get("source", "").strip().lower() != "tmdb":
+                    continue  # anime/books/games/etc. or a non-TMDB id: not a Jellyfin collection member
+                media_id = row.get("media_id", "").strip()
+                if not media_id.isdigit():
+                    continue
+                member = CollectionMember(
+                    media_type=member_type, tmdb_id=int(media_id), title=row.get("title", "").strip() or None,
+                )
+                if member.key in seen[uid]:
+                    continue
+                seen[uid].add(member.key)
+                record.members.append(member)
+
+        for uid in list_order:
+            yield lists[uid]

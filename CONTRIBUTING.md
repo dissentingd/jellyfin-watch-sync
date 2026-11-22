@@ -97,6 +97,12 @@ involved, since a single episode write touches four distinct tables
 idempotency check rather than one query per record — see its module
 docstring for why the query is batched.
 
+For a tracker that has a usable REST API, follow `targets/floppy_history.py`
+(`FloppyHistoryTarget`) and its client `targets/floppy_client.py` instead:
+it writes through the tracker's own API rather than its database, plans
+against one paged read of existing history, and tags every write with a
+deterministic `external_id` so a re-run can't duplicate anything.
+
 ## Adding a new source/target for Collections
 
 Same shape, separate ABC pair (`collections/base.py`:
@@ -130,6 +136,6 @@ trusting the existing queries to still be accurate on a newer YAMTrack.
 
 This ecosystem moves fast (see the README's "Version compatibility"
 section for two examples already found the hard way). If something breaks
-against your Jellyfin or YAMTrack version, please include both versions in
+against your Jellyfin, Floppy or YAMTrack version, please include those versions in
 the issue — that's the concrete, useful signal for widening what's
 supported, more useful than "please fix."

@@ -2,8 +2,8 @@
 
 **Reorganized your media library and now Jellyfin thinks you've never seen
 any of it?** This tool fixes that — it syncs your watch history (and
-Collections) between Jellyfin and [YAMTrack](https://github.com/FuzzyGrim/Yamtrack),
-in either direction, so a "watched" movie stays watched even after you move,
+Collections) between Jellyfin and [Floppy](https://github.com/dannyvfilms/Floppy)
+or [YAMTrack](https://github.com/FuzzyGrim/Yamtrack), in either direction, so a "watched" movie stays watched even after you move,
 rename, or re-encode the file.
 
 You don't need to know Python, SQL, or how Jellyfin's API works to use this.
@@ -36,8 +36,8 @@ the cracks.)
 identifies every movie and episode by its TMDB ID — a permanent ID from
 [The Movie Database](https://www.themoviedb.org/) that never changes no
 matter what you rename or move the file to. It reads your watch history
-from wherever it's still intact (an older backup, a YAMTrack export,
-YAMTrack's own database) and writes it back onto whatever your Jellyfin
+from wherever it's still intact (an older backup, a Floppy or YAMTrack
+export, YAMTrack's own database) and writes it back onto whatever your Jellyfin
 library currently calls that same movie or episode — by TMDB ID, not by
 filename.
 
@@ -163,6 +163,7 @@ jellyfin-watch-sync restore \
 
 | `--source-type` | What it reads | Extra options |
 |---|---|---|
+| `floppy-csv` | Floppy's own CSV export (Settings → Export) | `--source-path` |
 | `yamtrack-csv` | YAMTrack's own CSV export (Settings → Export) | `--source-path` |
 | `yamtrack-db` | YAMTrack's Postgres database directly | `--source-dsn`, `--yamtrack-user-id` (needs the `yamtrack-db` extra) |
 | `jellyfin-backup` | An older Jellyfin native backup (`.zip` or already-extracted folder) — useful when a reorganization damaged your *current* Jellyfin's watch state, but an older backup still has it intact | `--source-path`, `--username` |
@@ -181,13 +182,16 @@ episode,111111,1,1,2025-09-28,,Some Show S1E1
 
 `backup` is the mirror image of `restore` — instead of reading from
 somewhere else and writing into Jellyfin, it reads your *current* Jellyfin
-watch history and writes it out to YAMTrack or a CSV file. Same
+watch history and writes it out to Floppy, YAMTrack or a CSV file. Same
 look-then-confirm safety model.
 
 ```bash
 # Save everything Jellyfin currently has marked watched into a CSV file
 jellyfin-watch-sync backup \
   --target-type generic-csv --target-path ./jellyfin-watched.csv --apply
+
+# Or send it straight to Floppy, through its API
+jellyfin-watch-sync backup   --target-type floppy-api   --floppy-url https://floppy.example.com --floppy-token "..." --apply
 
 # Or write it straight into YAMTrack's database
 jellyfin-watch-sync backup \
@@ -199,12 +203,35 @@ jellyfin-watch-sync backup \
 | `--target-type` | What it writes | Extra options |
 |---|---|---|
 | `generic-csv` | The same plain CSV format described above — readable by any tool, not just this one | `--target-path` |
+| `floppy-api` | Into Floppy, through its REST API (works whether Floppy runs on SQLite or Postgres) | `--floppy-url`, `--floppy-token` (or `FLOPPY_URL`/`FLOPPY_TOKEN`) |
 | `yamtrack-db` | Directly into YAMTrack's Postgres database (needs the `yamtrack-db` extra) | `--yamtrack-dsn`, `--yamtrack-user-id` |
 
-`yamtrack-db` has the same "don't overwrite something newer" protection
+`floppy-api` and `yamtrack-db` have the same "don't overwrite something newer" protection
 described below. `generic-csv` always writes a complete, fresh file each
 time — think of it as a snapshot, not something that merges with a
 previous export.
+
+### Using Floppy
+
+[Floppy](https://github.com/dannyvfilms/Floppy) started as a fork of
+YAMTrack and is where much of the community has moved. This tool reads
+Floppy's CSV export and writes to Floppy through its API (an API token from
+your Floppy settings, sent as `FLOPPY_TOKEN`), never to its database
+directly.
+
+A few Floppy-specific notes:
+
+- **Floppy can already sync watched/unwatched with Jellyfin itself** (opt-in,
+  in Floppy's own settings). That sync only carries the watched checkmark,
+  not *when* you watched something, so this tool is still what restores real
+  watch dates. It is also the only way to sync **Collections**, which
+  Floppy's own Jellyfin sync doesn't cover.
+- Floppy keeps every rewatch as a separate play. `backup --target-type
+  floppy-api` skips anything Floppy already has a watch for at the same or a
+  later date, and tags each play it adds with a fixed ID, so running it
+  twice (or after an interrupted run) never adds the same play twice.
+- **Moving from YAMTrack to Floppy?** You don't need this tool for that:
+  Floppy imports YAMTrack's CSV export directly (Settings → Import).
 
 ### Safety details
 
@@ -221,20 +248,27 @@ previous export.
   Jellyfin library, it's reported as **unmatched** — you'll see it listed,
   it's never silently skipped. Matching by TMDB ID survives the file being
   moved or renamed, but not the title being removed from your library
-  entirely. (`backup` doesn't have this problem — writing into YAMTrack or
-  a CSV can always create whatever it needs.)
+  entirely. (`backup` doesn't have this problem — writing into Floppy, YAMTrack
+  or a CSV can always create whatever it needs.)
 
 ## Collections (Jellyfin BoxSets)
 
 Collections — the groupings you build in Jellyfin, like "Marvel Cinematic
 Universe" or "Christmas Movies" — suffer from the exact same
 file-relocation fragility as watch history. So this tool backs those up
-into YAMTrack's Lists feature too, and can restore them back the same way.
+into Floppy's or YAMTrack's Lists feature too, and can restore them back the
+same way.
 A collection groups movies and/or whole TV series (not individual episodes
 — that's the level of detail Jellyfin itself uses for collections).
 
 ```bash
-# Back up all your Jellyfin collections into YAMTrack Lists
+# Floppy: back up all your Jellyfin collections into Floppy Lists
+jellyfin-watch-sync backup-collections --target-type floppy-api   --floppy-url https://floppy.example.com --floppy-token "..." --apply
+
+# ... later, restore them from a Floppy CSV export (Settings → Export)
+jellyfin-watch-sync restore-collections   --source-type floppy-csv --source-path ./floppy-export.csv --apply
+
+# YAMTrack: back up all your Jellyfin collections into YAMTrack Lists
 jellyfin-watch-sync backup-collections \
   --yamtrack-dsn "postgresql://yamtrack:...@host:5432/yamtrack" \
   --yamtrack-user-id 4 --apply
@@ -247,9 +281,10 @@ jellyfin-watch-sync restore-collections \
 
 Restoring is never destructive: if a collection with the same name already
 exists in Jellyfin, this only ever adds new members to it — it never
-removes or replaces anything already there. Requires the `yamtrack-db`
-extra either way, since YAMTrack has no CSV export for Lists (or for watch
-history) the way it does for other data.
+removes or replaces anything already there. Backing up into an existing
+Floppy List works the same way: members are only ever added. The YAMTrack
+commands need the `yamtrack-db` extra, since YAMTrack's CSV export doesn't
+include Lists; Floppy's does, so the Floppy commands don't.
 
 ## If something isn't working: version compatibility
 
@@ -280,9 +315,14 @@ trouble spots, not a sign the tool is broadly broken:
   `yamtrack-db` or `*-collections` command fails with a raw database
   error, check whether your YAMTrack version's structure still matches
   before assuming this tool itself is broken.
+- **Floppy support** was built against Floppy's own source code and its
+  published API description (as of 2026-11-20), and is covered by automated
+  tests, but it has not yet been run against a live Floppy server. If a
+  Floppy command fails, the error message includes what Floppy said; please
+  include it in an issue.
 
 Hit a version-specific problem? Please open an issue with your Jellyfin and
-YAMTrack versions — that's genuinely useful for widening what's supported,
+Floppy/YAMTrack versions — that's genuinely useful for widening what's supported,
 not noise.
 
 <details>

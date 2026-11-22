@@ -5,12 +5,12 @@ build-backend = "hatchling.build"
 [project]
 name = "jellyfin-watch-sync"
 version = "0.1.0"
-description = "Sync watch history and collections between Jellyfin and YAMTrack (or a generic CSV), in either direction"
+description = "Sync watch history and collections between Jellyfin and Floppy, YAMTrack or a generic CSV, in either direction"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"
 authors = [{ name = "dissentingd" }]
-keywords = ["jellyfin", "watch-history", "yamtrack", "sync", "media-server"]
+keywords = ["jellyfin", "watch-history", "floppy", "yamtrack", "sync", "media-server"]
 classifiers = [
     "Environment :: Console",
     "Intended Audience :: End Users/Desktop",

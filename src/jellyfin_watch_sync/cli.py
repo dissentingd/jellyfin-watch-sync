@@ -18,15 +18,28 @@ from dotenv import find_dotenv, load_dotenv
 from rich.console import Console
 from rich.table import Table
 
+from .collections.base import CollectionSource, CollectionTarget
 from .collections.plan import CollectionPlan
-from .collections.sources import JellyfinCollectionsSource, YamtrackListsSource
-from .collections.targets import JellyfinCollectionsTarget, YamtrackListsTarget
+from .collections.sources import (
+    FloppyCsvListsSource,
+    JellyfinCollectionsSource,
+    YamtrackListsSource,
+)
+from .collections.targets import FloppyListsTarget, JellyfinCollectionsTarget, YamtrackListsTarget
 from .errors import describe_error
 from .models import WatchRecord
 from .plan import ActionOutcome, RestorePlan
-from .sources import GenericCsvSource, JellyfinBackupSource, JellyfinLiveSource, YamtrackCsvSource
+from .sources import (
+    FloppyCsvSource,
+    GenericCsvSource,
+    JellyfinBackupSource,
+    JellyfinLiveSource,
+    YamtrackCsvSource,
+)
 from .sources.base import Source
 from .targets.base import Target
+from .targets.floppy_client import FloppyClient
+from .targets.floppy_history import FloppyHistoryTarget
 from .targets.generic_csv import GenericCsvTarget
 from .targets.jellyfin import JellyfinTarget
 from .targets.jellyfin_client import JellyfinClient
@@ -63,6 +76,7 @@ class SourceType(str, Enum):
     yamtrack_db = "yamtrack-db"
     generic_csv = "generic-csv"
     jellyfin_backup = "jellyfin-backup"
+    floppy_csv = "floppy-csv"
 
 
 class HistoryTargetType(str, Enum):
@@ -74,6 +88,31 @@ class HistoryTargetType(str, Enum):
 
     yamtrack_db = "yamtrack-db"
     generic_csv = "generic-csv"
+    floppy_api = "floppy-api"
+
+
+class CollectionsTargetType(str, Enum):
+    """Where `backup-collections` writes Jellyfin Collections to, as Lists."""
+
+    yamtrack_db = "yamtrack-db"
+    floppy_api = "floppy-api"
+
+
+class CollectionsSourceType(str, Enum):
+    """Where `restore-collections` reads Lists from. Floppy's are read from
+    its CSV export rather than its API: the export's layout is the one Floppy
+    keeps stable for its own re-import."""
+
+    yamtrack_db = "yamtrack-db"
+    floppy_csv = "floppy-csv"
+
+
+def _floppy_client(floppy_url: str | None, floppy_token: str | None) -> FloppyClient:
+    if not floppy_url or not floppy_token:
+        raise typer.BadParameter(
+            "--floppy-url and --floppy-token (or FLOPPY_URL/FLOPPY_TOKEN) are required for floppy-api"
+        )
+    return FloppyClient(floppy_url, floppy_token)
 
 
 def _build_source(
@@ -83,7 +122,9 @@ def _build_source(
     username: str | None,
     yamtrack_user_id: int | None,
 ) -> Source:
-    needs_path = (SourceType.yamtrack_csv, SourceType.generic_csv, SourceType.jellyfin_backup)
+    needs_path = (
+        SourceType.yamtrack_csv, SourceType.generic_csv, SourceType.jellyfin_backup, SourceType.floppy_csv,
+    )
     if source_type in needs_path and source_path is None:
         raise typer.BadParameter(f"--source-path is required for {source_type.value}")
 
@@ -91,6 +132,8 @@ def _build_source(
         return YamtrackCsvSource(source_path)
     if source_type is SourceType.generic_csv:
         return GenericCsvSource(source_path)
+    if source_type is SourceType.floppy_csv:
+        return FloppyCsvSource(source_path)
     if source_type is SourceType.jellyfin_backup:
         if not username:
             raise typer.BadParameter("--username is required for jellyfin-backup")
@@ -109,6 +152,8 @@ def _build_history_target(
     target_path: Path | None,
     yamtrack_dsn: str | None,
     yamtrack_user_id: int | None,
+    floppy_url: str | None = None,
+    floppy_token: str | None = None,
 ) -> Target:
     if target_type is HistoryTargetType.generic_csv:
         if target_path is None:
@@ -120,6 +165,8 @@ def _build_history_target(
         from .targets.yamtrack_history import YamtrackHistoryTarget  # optional extra
 
         return YamtrackHistoryTarget(yamtrack_dsn, yamtrack_user_id)
+    if target_type is HistoryTargetType.floppy_api:
+        return FloppyHistoryTarget(_floppy_client(floppy_url, floppy_token))
     raise AssertionError(target_type)  # pragma: no cover
 
 
@@ -130,7 +177,7 @@ def restore(
     jellyfin_url: Annotated[str, typer.Option(envvar="JELLYFIN_URL")],
     jellyfin_api_key: Annotated[str, typer.Option(envvar="JELLYFIN_API_KEY")],
     jellyfin_user_id: Annotated[str, typer.Option(envvar="JELLYFIN_USER_ID", help="Jellyfin user GUID to restore watch state for.")],
-    source_path: Annotated[Path | None, typer.Option(help="CSV path or Jellyfin backup zip/dir.")] = None,
+    source_path: Annotated[Path | None, typer.Option(help="CSV path (YAMTrack, Floppy or generic) or Jellyfin backup zip/dir.")] = None,
     source_dsn: Annotated[str | None, typer.Option(help="Postgres DSN, for --source-type=yamtrack-db.")] = None,
     username: Annotated[str | None, typer.Option(help="Jellyfin username, for --source-type=jellyfin-backup.")] = None,
     yamtrack_user_id: Annotated[int | None, typer.Option(help="YAMTrack users_user.id, for --source-type=yamtrack-db.")] = None,
@@ -172,8 +219,10 @@ def backup(
     target_path: Annotated[Path | None, typer.Option(help="Output CSV path, for --target-type=generic-csv.")] = None,
     yamtrack_dsn: Annotated[str | None, typer.Option(envvar="YAMTRACK_DSN", help="Postgres DSN, for --target-type=yamtrack-db.")] = None,
     yamtrack_user_id: Annotated[int | None, typer.Option(envvar="YAMTRACK_USER_ID", help="YAMTrack users_user.id to own the backed-up history, for --target-type=yamtrack-db.")] = None,
+    floppy_url: Annotated[str | None, typer.Option(envvar="FLOPPY_URL", help="Floppy base URL, for --target-type=floppy-api.")] = None,
+    floppy_token: Annotated[str | None, typer.Option(envvar="FLOPPY_TOKEN", help="Floppy API token, for --target-type=floppy-api.")] = None,
     limit: Annotated[int | None, typer.Option(help="Only consider the first N records (for testing).")] = None,
-    force: Annotated[bool, typer.Option(help="For --target-type=yamtrack-db: overwrite even if YAMTrack's date is already as recent.")] = False,
+    force: Annotated[bool, typer.Option(help="For yamtrack-db/floppy-api: write even if the target already has a watch at least as recent.")] = False,
     apply: Annotated[bool, typer.Option("--apply", help="Actually write to the target. Without this, only a plan is printed.")] = False,
     sample: Annotated[int, typer.Option(help="How many example matched records to print.")] = 10,
 ) -> None:
@@ -184,8 +233,23 @@ def backup(
     # Validate the target BEFORE doing a live Jellyfin crawl, not after --
     # a bad --target-path/--yamtrack-dsn should fail immediately, not burn
     # a full library read first only to error out at the very end.
-    target = _build_history_target(target_type, target_path, yamtrack_dsn, yamtrack_user_id)
+    target = _build_history_target(
+        target_type, target_path, yamtrack_dsn, yamtrack_user_id, floppy_url, floppy_token,
+    )
+    try:
+        _run_backup(
+            target, jellyfin_url, jellyfin_api_key, jellyfin_user_id,
+            limit=limit, force=force, apply=apply, sample=sample,
+        )
+    finally:
+        if isinstance(target, FloppyHistoryTarget):
+            target.client.close()
 
+
+def _run_backup(
+    target: Target, jellyfin_url: str, jellyfin_api_key: str, jellyfin_user_id: str,
+    *, limit: int | None, force: bool, apply: bool, sample: int,
+) -> None:
     with JellyfinClient(jellyfin_url, jellyfin_api_key, jellyfin_user_id) as client:
         source = JellyfinLiveSource(client)
         records: list[WatchRecord] = []
@@ -261,34 +325,56 @@ def backup_collections(
     jellyfin_url: Annotated[str, typer.Option(envvar="JELLYFIN_URL")],
     jellyfin_api_key: Annotated[str, typer.Option(envvar="JELLYFIN_API_KEY")],
     jellyfin_user_id: Annotated[str, typer.Option(envvar="JELLYFIN_USER_ID")],
-    yamtrack_dsn: Annotated[str, typer.Option(envvar="YAMTRACK_DSN", help="Postgres DSN for YAMTrack's database.")],
-    yamtrack_user_id: Annotated[int, typer.Option(envvar="YAMTRACK_USER_ID", help="YAMTrack users_user.id to own the backed-up lists.")],
-    apply: Annotated[bool, typer.Option("--apply", help="Actually write to YAMTrack. Without this, only a plan is printed.")] = False,
+    target_type: Annotated[CollectionsTargetType, typer.Option(help="Where the Lists are written.")] = CollectionsTargetType.yamtrack_db,
+    yamtrack_dsn: Annotated[str | None, typer.Option(envvar="YAMTRACK_DSN", help="Postgres DSN for YAMTrack's database, for --target-type=yamtrack-db.")] = None,
+    yamtrack_user_id: Annotated[int | None, typer.Option(envvar="YAMTRACK_USER_ID", help="YAMTrack users_user.id to own the backed-up lists, for --target-type=yamtrack-db.")] = None,
+    floppy_url: Annotated[str | None, typer.Option(envvar="FLOPPY_URL", help="Floppy base URL, for --target-type=floppy-api.")] = None,
+    floppy_token: Annotated[str | None, typer.Option(envvar="FLOPPY_TOKEN", help="Floppy API token, for --target-type=floppy-api.")] = None,
+    apply: Annotated[bool, typer.Option("--apply", help="Actually write to the target. Without this, only a plan is printed.")] = False,
     sample: Annotated[int, typer.Option()] = 10,
 ) -> None:
-    """Back up Jellyfin Collections into YAMTrack Lists (one List per Collection)."""
+    """Back up Jellyfin Collections into YAMTrack or Floppy Lists (one List per Collection)."""
+    target: CollectionTarget
+    if target_type is CollectionsTargetType.floppy_api:
+        target = FloppyListsTarget(_floppy_client(floppy_url, floppy_token))
+    else:
+        if not yamtrack_dsn or yamtrack_user_id is None:
+            raise typer.BadParameter("--yamtrack-dsn and --yamtrack-user-id are required for yamtrack-db")
+        target = YamtrackListsTarget(yamtrack_dsn, yamtrack_user_id)
+    try:
+        _run_backup_collections(
+            target, jellyfin_url, jellyfin_api_key, jellyfin_user_id, apply=apply, sample=sample,
+        )
+    finally:
+        if isinstance(target, FloppyListsTarget):
+            target.client.close()
+
+
+def _run_backup_collections(
+    target: CollectionTarget, jellyfin_url: str, jellyfin_api_key: str, jellyfin_user_id: str,
+    *, apply: bool, sample: int,
+) -> None:
     with JellyfinClient(jellyfin_url, jellyfin_api_key, jellyfin_user_id) as client:
         source = JellyfinCollectionsSource(client)
         with console.status(f"reading {source.describe()}..."):
             records = list(source.records())
     console.print(f"read {len(records)} collections from {source.describe()}")
 
-    target = YamtrackListsTarget(yamtrack_dsn, yamtrack_user_id)
-    with console.status("planning..."):
+    with console.status(f"planning against {target.describe()}..."):
         plan = target.plan(records)
     plan.source_description = source.describe()
 
     _print_collection_plan(plan, sample=sample)
 
     if not apply:
-        console.print("\n[yellow]Dry run only -- pass --apply to actually write to YAMTrack.[/yellow]")
+        console.print(f"\n[yellow]Dry run only -- pass --apply to actually write to {target.describe()}.[/yellow]")
         return
     if not plan.actions:
         console.print("\nNothing to apply.")
         return
 
     console.print(f"\n[bold]Applying {len(plan.actions)} collection(s)...[/bold]")
-    with console.status("writing to YAMTrack..."):
+    with console.status(f"writing to {target.describe()}..."):
         target.apply(plan)
     _print_apply_results(plan, sample=sample)
 
@@ -296,17 +382,27 @@ def backup_collections(
 @app.command()
 @_friendly_errors
 def restore_collections(
-    yamtrack_dsn: Annotated[str, typer.Option(envvar="YAMTRACK_DSN")],
-    yamtrack_user_id: Annotated[int, typer.Option(envvar="YAMTRACK_USER_ID", help="YAMTrack users_user.id whose Lists to read.")],
     jellyfin_url: Annotated[str, typer.Option(envvar="JELLYFIN_URL")],
     jellyfin_api_key: Annotated[str, typer.Option(envvar="JELLYFIN_API_KEY")],
     jellyfin_user_id: Annotated[str, typer.Option(envvar="JELLYFIN_USER_ID")],
+    source_type: Annotated[CollectionsSourceType, typer.Option(help="Where the Lists are read from.")] = CollectionsSourceType.yamtrack_db,
+    yamtrack_dsn: Annotated[str | None, typer.Option(envvar="YAMTRACK_DSN", help="For --source-type=yamtrack-db.")] = None,
+    yamtrack_user_id: Annotated[int | None, typer.Option(envvar="YAMTRACK_USER_ID", help="YAMTrack users_user.id whose Lists to read, for --source-type=yamtrack-db.")] = None,
+    source_path: Annotated[Path | None, typer.Option(help="Floppy CSV export, for --source-type=floppy-csv.")] = None,
     apply: Annotated[bool, typer.Option("--apply", help="Actually write to Jellyfin. Without this, only a plan is printed.")] = False,
     sample: Annotated[int, typer.Option()] = 10,
 ) -> None:
-    """Restore YAMTrack Lists into Jellyfin as Collections. Never destructive:
-    an existing collection with a matching name is only ever added to."""
-    source = YamtrackListsSource(yamtrack_dsn, yamtrack_user_id)
+    """Restore YAMTrack or Floppy Lists into Jellyfin as Collections. Never
+    destructive: an existing collection with a matching name is only ever added to."""
+    source: CollectionSource
+    if source_type is CollectionsSourceType.floppy_csv:
+        if source_path is None:
+            raise typer.BadParameter("--source-path is required for floppy-csv")
+        source = FloppyCsvListsSource(source_path)
+    else:
+        if not yamtrack_dsn or yamtrack_user_id is None:
+            raise typer.BadParameter("--yamtrack-dsn and --yamtrack-user-id are required for yamtrack-db")
+        source = YamtrackListsSource(yamtrack_dsn, yamtrack_user_id)
     with console.status(f"reading {source.describe()}..."):
         records = list(source.records())
     console.print(f"read {len(records)} lists from {source.describe()}")

@@ -1,11 +1,12 @@
-"""Targets for CollectionRecord: live Jellyfin (restore) and YAMTrack's Lists
-table (backup)."""
+"""Targets for CollectionRecord: live Jellyfin (restore), and YAMTrack's Lists
+table or Floppy's Lists API (backup)."""
 
 from __future__ import annotations
 
 from collections.abc import Iterable
 
 from ..plan import ActionOutcome
+from ..targets.floppy_client import FloppyClient
 from ..targets.jellyfin_client import JellyfinClient
 from ..targets.jellyfin_index import JellyfinLibraryIndex
 from .base import CollectionTarget
@@ -179,3 +180,77 @@ class YamtrackListsTarget(CollectionTarget):
             (media_type, str(tmdb_id), title or f"tmdb:{tmdb_id}"),
         )
         return cur.fetchone()[0]
+
+
+class FloppyListsTarget(CollectionTarget):
+    """Backs up collections into Floppy as Lists, through Floppy's REST API
+    (see targets/floppy_client.py for why not its database).
+
+    Like YamtrackListsTarget, every member counts as "matched": Floppy creates
+    an item it hasn't seen yet from TMDB when it's added to a list, so there's
+    no library lookup to fail at plan time. A List whose name already exists
+    for this user is added to, never replaced or pruned. Adding a member that's
+    already in the list is a no-op (Floppy answers 409), so re-running is safe.
+    """
+
+    def __init__(self, client: FloppyClient) -> None:
+        self.client = client
+        self._existing_by_name: dict[str, int] = {}
+
+    def describe(self) -> str:
+        return f"Floppy Lists ({self.client.base_url})"
+
+    def plan(self, records: Iterable[CollectionRecord]) -> CollectionPlan:
+        for floppy_list in self.client.lists():
+            self._existing_by_name.setdefault(floppy_list.name, floppy_list.list_id)
+
+        plan = CollectionPlan(source_description="", target_description=self.describe())
+        for record in records:
+            resolutions = [
+                MemberResolution(member=m, target_item_id=f"tmdb:{m.tmdb_id}") for m in record.members
+            ]
+            if not resolutions:
+                plan.skipped_empty.append(record)
+                continue
+            existing = self._existing_by_name.get(record.name)
+            plan.actions.append(CollectionAction(
+                record=record,
+                existing_target_id=str(existing) if existing is not None else None,
+                members=resolutions,
+            ))
+        return plan
+
+    def apply(self, plan: CollectionPlan) -> CollectionPlan:
+        for action in plan.actions:
+            if action.outcome is not ActionOutcome.PENDING:
+                continue
+            try:
+                if action.existing_target_id is not None:
+                    list_id = int(action.existing_target_id)
+                else:
+                    list_id = self.client.create_list(action.record.name, action.record.description)
+                    action.existing_target_id = str(list_id)
+            except Exception as exc:  # noqa: BLE001 - report per-collection, keep going
+                action.outcome = ActionOutcome.FAILED
+                action.error = str(exc)
+                continue
+
+            # One member failing (e.g. a TMDB id Floppy can't fetch) shouldn't
+            # stop the rest of the list from being backed up.
+            errors: list[str] = []
+            for resolution in action.members:
+                member = resolution.member
+                media_type = "tv" if member.media_type is CollectionMemberType.SERIES else "movie"
+                try:
+                    self.client.add_to_list(list_id, media_type, member.tmdb_id)
+                except Exception as exc:  # noqa: BLE001
+                    errors.append(f"{member.title or member.tmdb_id}: {exc}")
+            if errors:
+                action.outcome = ActionOutcome.FAILED
+                action.error = (
+                    f"{len(errors)} of {len(action.members)} member(s) could not be added "
+                    f"(the rest were); first: {errors[0]}"
+                )
+            else:
+                action.outcome = ActionOutcome.APPLIED
+        return plan

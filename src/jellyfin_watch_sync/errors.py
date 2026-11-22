@@ -9,11 +9,15 @@ from __future__ import annotations
 
 import httpx
 
+from .targets.floppy_client import FloppyError
+
 
 def describe_error(exc: Exception) -> str | None:
     """Returns a friendly diagnostic for a known, common failure mode, or
     None if this isn't one -- callers should re-raise (or let the original
     exception surface) in that case rather than hide an unfamiliar error."""
+    if isinstance(exc, FloppyError):
+        return str(exc)  # FloppyClient already phrases these for the user
     if isinstance(exc, httpx.HTTPStatusError):
         return _describe_http_status_error(exc)
     if isinstance(exc, httpx.ConnectError):
