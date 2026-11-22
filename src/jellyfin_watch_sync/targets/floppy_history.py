@@ -12,6 +12,13 @@ play rather than overwrite a date. Two consequences shape this target:
   date. That's this tool's usual "never regress" rule, and here it also keeps
   a play that Floppy's own Jellyfin sync already recorded from being added a
   second time. `--force` writes anyway.
+- "The same date" is deliberately loose: a Floppy watch covers any record
+  less than a day after it. Watches that came into Floppy from a tracker
+  import often kept only the date (stored as local midnight), so the exact
+  same viewing shows up in Jellyfin as a few hours *later* the same day.
+  Found against a real migrated library, where a strict comparison would
+  have added a second play for ~all of 4,000+ movies. The cost is that a
+  genuine rewatch within 24 hours of an earlier one isn't added.
 - Every write carries a deterministic `external_id` derived from the record
   (TMDB id, season/episode, watch time). Floppy treats a repeated
   external_id as the same play, so re-running a backup, or an apply that
@@ -21,7 +28,7 @@ play rather than overwrite a date. Two consequences shape this target:
 from __future__ import annotations
 
 from collections.abc import Iterable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from ..models import MediaType, WatchRecord
 from ..plan import ActionOutcome, MatchedAction, RestorePlan, SkippedAlreadyCurrent
@@ -29,6 +36,9 @@ from .base import Target
 from .floppy_client import FloppyClient
 
 EXTERNAL_ID_PREFIX = "jellyfin-watch-sync"
+# A Floppy watch counts as the same viewing as a record up to this much later
+# (see the module docstring: imported dates often lost their time of day).
+SAME_WATCH_WINDOW = timedelta(days=1)
 
 
 def _as_aware(dt: datetime) -> datetime:
@@ -69,7 +79,7 @@ class FloppyHistoryTarget(Target):
 
             target_id = external_id_for(record)
             existing = latest.get(record.key)
-            if not force and existing is not None and existing >= _as_aware(record.watched_at):
+            if not force and existing is not None and existing + SAME_WATCH_WINDOW > _as_aware(record.watched_at):
                 plan.skipped_already_current.append(
                     SkippedAlreadyCurrent(record=record, target_item_id=target_id, current_watched_at=str(existing))
                 )

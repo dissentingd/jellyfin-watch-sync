@@ -17,7 +17,7 @@ found by reading Floppy's source (not assumed):
 
 Endpoints used (all verified against Floppy's src/api/ on 2026-11-22):
 
-    GET  /api/v1/history/?flat=1&types=movie,episode&limit=&offset=
+    GET  /api/v1/history/?flat=1&types=movie,tv&limit=&offset=
     POST /api/v1/media/movie/tmdb/{id}/watch/                 {end_date, external_id}
     POST /api/v1/media/tv/tmdb/{id}/{season}/episodes/{ep}/watch/   {end_date, external_id}
     GET  /api/v1/lists/?limit=&offset=
@@ -137,8 +137,12 @@ class FloppyClient:
         entries: list[FloppyHistoryEntry] = []
         offset = 0
         while True:
+            # "tv", not "episode": Floppy's history filter expands "tv" to
+            # shows/seasons/episodes, while "episode" on its own matches
+            # nothing (found against a live server: types=movie,episode
+            # returned only the movies).
             resp = self._request("GET", "/history/", params={
-                "flat": "1", "types": "movie,episode", "limit": _HISTORY_PAGE_SIZE, "offset": offset,
+                "flat": "1", "types": "movie,tv", "limit": _HISTORY_PAGE_SIZE, "offset": offset,
             })
             data = resp.json()
             page = data.get("results", [])

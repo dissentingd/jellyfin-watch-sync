@@ -47,6 +47,8 @@ def _mock_history(httpx_mock, entries, page_size=200):
     def callback(request: httpx.Request) -> httpx.Response:
         assert request.headers["Authorization"] == "Bearer tok"
         assert request.url.params["flat"] == "1"
+        # "episode" alone matches nothing in Floppy's filter; "tv" expands to episodes
+        assert request.url.params["types"] == "movie,tv"
         offset = int(request.url.params["offset"])
         return httpx.Response(200, json={
             "pagination": {"total": len(entries), "limit": page_size, "offset": offset, "next": None, "previous": None},
@@ -104,6 +106,21 @@ def test_history_target_skips_what_floppy_already_has(httpx_mock, client):
 
     forced = target.plan(records, force=True)
     assert [m.record.tmdb_id for m in forced.matched] == [1, 10, 2]
+
+
+def test_a_date_only_floppy_watch_covers_the_same_viewing_later_that_day(httpx_mock, client):
+    # Imported from a tracker that kept only the date: local midnight (07:00Z in Pacific time).
+    _mock_history(httpx_mock, [_history_entry("movie", "17443", "2019-03-12T07:00:00Z")])
+    target = FloppyHistoryTarget(client)
+
+    plan = target.plan([
+        _movie(17443, datetime(2019, 3, 12, 23, 32, tzinfo=UTC)),  # same viewing, Jellyfin has the time
+    ])
+    assert plan.matched == []
+    assert [s.record.tmdb_id for s in plan.skipped_already_current] == [17443]
+
+    later = target.plan([_movie(17443, datetime(2019, 3, 14, 20, 0, tzinfo=UTC))])  # a real rewatch
+    assert [m.record.tmdb_id for m in later.matched] == [17443]
 
 
 def test_history_target_apply_posts_dated_plays_with_stable_external_ids(httpx_mock, client):
