@@ -22,6 +22,7 @@ from jellyfin_watch_sync.targets.floppy_client import FloppyClient, FloppyError
 from jellyfin_watch_sync.targets.floppy_history import FloppyHistoryTarget, external_id_for
 
 BASE = "http://floppy.test"
+NAIVE = datetime.fromisoformat("2020-01-01T00:00:00")  # deliberately no timezone
 
 
 @pytest.fixture
@@ -92,8 +93,8 @@ def test_history_target_skips_what_floppy_already_has(httpx_mock, client):
     records = [
         _movie(1, datetime(2020, 1, 1, tzinfo=UTC)),       # older than Floppy's -> skip
         _episode(10, 1, 2, datetime(2021, 1, 1, tzinfo=UTC)),  # newer -> write
-        _movie(2, datetime(2020, 1, 1)),  # noqa: DTZ001 - not in Floppy, naive date -> write
-        _movie(2, datetime(2020, 1, 1)),  # noqa: DTZ001 - duplicate -> ignored
+        _movie(2, NAIVE),  # not in Floppy, naive date -> write
+        _movie(2, NAIVE),  # duplicate -> ignored
     ]
 
     plan = target.plan(records)
